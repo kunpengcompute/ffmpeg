@@ -29,7 +29,7 @@ diff -uprN tmp/ffmpeg-7.0.1/configure ffmpeg-7.0.1/configure
                               check_cpp_condition libx262 x264.h "X264_MPEG2"
  enabled libx265           && require_pkg_config libx265 x265 x265.h x265_api_get &&
                               require_cpp_condition libx265 x265.h "X265_BUILD >= 89"
-+enabled libhw265          && require libhw265 "hwe_api.h" HWE_Process "-lhw265"
++enabled libhw265          && require_pkg_config libhw265 hw265 "hwe_api.h" HWE_Process
  enabled libxavs           && require libxavs "stdint.h xavs.h" xavs_encoder_encode "-lxavs $pthreads_extralibs $libm_extralibs"
  enabled libxavs2          && require_pkg_config libxavs2 "xavs2 >= 1.3.0" "stdint.h xavs2.h" xavs2_api_get
  enabled libxevd           && require_pkg_config libxevd "xevd >= 0.4.1" "xevd.h" xevd_decode
@@ -181,7 +181,7 @@ diff -uprN tmp/ffmpeg-7.0.1/libavcodec/libhw265.c ffmpeg-7.0.1/libavcodec/libhw2
 +    return result;
 +}
 +
-+static HWE_ReturnVal Libhw265EncodeDone(unsigned int channelID, void *outHandle, HWE_Output *outputData)
++static HWE_ReturnVal Libhw265EncodeDone(unsigned int channelID, const void *outHandle, HWE_Output *outputData)
 +{
 +    Libhw265Context *ctx = (Libhw265Context *)outHandle;
 +    AVCodecContext *avctx = ctx->pOutHandle;
