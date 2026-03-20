@@ -1,4 +1,10 @@
-# 项目介绍
+# FFmpeg 介绍
+
+## 最新消息
+* 基于鲲鹏服务器对FFmpeg-4.4.2中libswscale库的bilinear，bicubic和lanczos三种缩放算法进行性能优化。
+* 基于鲲鹏服务器对FFmpeg-7.1.1中libswscale库的sws\_scale函数进行性能优化。
+
+## 简介
 
 鲲鹏FFmpeg代码仓是基于鲲鹏服务器对开源FFmpeg进行优化的成果，存放**FFmpeg性能优化**的相关补丁。补丁功能包括：
 
@@ -6,16 +12,18 @@
 
 * ffmpeg_4.4.2-optimize-scale.patch: 该补丁主要是针对FFmpeg-4.4.2中的libswscale的bilinear，bicubic和lanczos三种缩放算法下进行的优化。主要通过不同场景的向量化定制改写，使能SVE向量化以及指令流水化等方法，提升当前缩放算法的性能。
 
-# 目录结构
+## 目录结构
 
 ```bash
-├──docs/                                 # 项目文档目录
-│   └── zh/                               # 中文文档目录
-├──patch_for_ffmpeg_4.2.2_to_support_HW265ENC/  # HW265编码器FFmpeg-4.2.2插件目录
-├──patch_for_ffmpeg_7.0.1_to_support_HW265ENC/  # HW265编码器FFmpeg-7.0.1插件目录
-├──ffmpeg_4.4.2-optimize-scale.patch            # FFmpeg-4.4.2缩放算法优化补丁
-├──huawei_ffmpeg-7.1.1_sws_scale_optimize.patch # FFmpeg-7.1.1缩放算法优化补丁
-├──LICENSE.md                                    # 许可证说明文件
+├──docs/                                         # 项目文档目录
+│   ├── zh/                                      # 中文文档目录
+│   │   ├── ffmpeg_4.4.2_install_guide.md        # FFmpeg-4.4.2_scale工具安装指南
+│   │   ├── LICENSE                              # 文档许可证
+├──patch_for_ffmpeg_4.2.2_to_support_HW265ENC/   # HW265编码器FFmpeg-4.2.2插件目录
+├──patch_for_ffmpeg_7.0.1_to_support_HW265ENC/   # HW265编码器FFmpeg-7.0.1插件目录
+├──ffmpeg_4.4.2-optimize-scale.patch             # FFmpeg-4.4.2缩放算法优化补丁
+├──huawei_ffmpeg-7.1.1_sws_scale_optimize.patch  # FFmpeg-7.1.1缩放算法优化补丁
+├──LICENSE                                       # 开源许可证
 ├──.gitattributes                                # Git属性配置文件
 ├──COPYING.LGPLv2.1                              # LGPL v2.1许可证文本
 ├──ffmpeg-7.1.1.tar.gz                           # FFmpeg 7.1.1源码压缩包
@@ -92,7 +100,7 @@ sws\_scale函数是FFmpeg框架中libswscale库的核心函数之一，主要用
 
 ## 环境部署
 
-FFmpeg-4.4.2版本的scale优化的环境部署具体参考《[FFmpeg-4.4.2_scale工具安装指南](./docs/zh/ffmpeg_4.4.2_install_guide.md)》
+FFmpeg-4.4.2版本的scale优化的环境部署具体参考《[FFmpeg-4.4.2_scale工具安装指南](./docs/zh/ffmpeg_4.4.2_install_guide.md)》。
 
 ## 快速入门
 
