@@ -1,8 +1,8 @@
 # FFmpeg 介绍
 
 ## 最新消息
-* 基于鲲鹏服务器对FFmpeg-4.4.2中libswscale库的bilinear，bicubic和lanczos三种缩放算法进行性能优化。
-* 基于鲲鹏服务器对FFmpeg-7.1.1中libswscale库的sws\_scale函数进行性能优化。
+* [2026.03.30]：基于鲲鹏服务器对FFmpeg-4.4.2中libswscale库的bilinear，bicubic和lanczos三种缩放算法进行性能优化。
+* [2025.09.30]：基于鲲鹏服务器对FFmpeg-7.1.1中libswscale库的sws\_scale函数进行性能优化。
 
 ## 简介
 
@@ -107,7 +107,11 @@ FFmpeg-4.4.2版本的scale优化的环境部署具体参考《[FFmpeg-4.4.2_scal
 ```bash
 # 使用YUV序列进行测试
 taskset -c 88 /home/path/to/ffmpegInstall/bin/ffmpeg -f rawvideo -pix_fmt yuv420p -video_size 1920x1080 -i /home/path/to/video/Ca4_1920x1080.yuv -vf "scale=1280:720" -sws_flags "bilinear" -pix_fmt yuv420p -y output_1280x720.yuv
+
+# 在当前目录检查是否有输出文件
+ls -lh output_1280x720.yuv
 ```
+执行测试命令，无错误信息且当前目录下有输出文件output_1280x720.yuv，说明执行成功。
 
 # License
 
