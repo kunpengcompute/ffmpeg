@@ -30,19 +30,19 @@
 └──README.md                                     # 项目说明文档
 ```
 
-# FFmpeg 7.1.1 缩放优化特性
+## FFmpeg 7.1.1 缩放优化特性
 
-## 特性简介
+### 特性简介
 
 sws\_scale函数是FFmpeg框架中libswscale库的核心函数之一，主要用于图像的缩放、色彩空间转换以及像素格式转换。色彩空间转换优化补丁通过并行优化色彩空间转换函数，实现性能提升。
 
-## 版本说明
+### 版本说明
 
 | 开源软件版本 | 补丁特性 |
 | :--- | :--- |
 | FFmpeg-7.1.1 | sws_scale函数优化 |
 
-## 环境部署
+### 环境部署
 
 1. 克隆本仓库。
 
@@ -86,23 +86,23 @@ sws\_scale函数是FFmpeg框架中libswscale库的核心函数之一，主要用
     ffmpeg -version
     ```
 
-# FFmpeg 4.4.2 缩放优化特性
+## FFmpeg 4.4.2 缩放优化特性
 
-## 特性简介
+### 特性简介
 
 该特性针对FFmpeg-4.4.2中的libswscale的bilinear，bicubic和lanczos三种缩放算法下进行的优化。主要通过不同场景的向量化定制改写，使能SVE向量化以及指令流水化等方法，提升当前缩放算法的性能。
 
-## 版本说明
+### 版本说明
 
 | 开源软件版本 | 补丁特性 |
 | :--- | :--- |
 |FFmpeg-4.4.2|sws_scale函数中bilinear，bicubic和lanczos算法优化|
 
-## 环境部署
+### 环境部署
 
 FFmpeg-4.4.2版本的scale优化的环境部署具体参考《[FFmpeg-4.4.2_scale工具安装指南](./docs/zh/ffmpeg_4.4.2_install_guide.md)》。
 
-## 快速入门
+### 快速入门
 
 ```bash
 # 使用YUV序列进行测试
