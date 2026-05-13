@@ -5,15 +5,16 @@
 sws\_scale函数是FFmpeg框架中libswscale库的核心函数之一，主要用于图像的缩放、色彩空间转换以及像素格式转换。色彩空间转换优化补丁通过并行优化色彩空间转换函数，实现性能提升。
 
 ## 环境要求
+
 本文基于鲲鹏服务器和openEuler操作系统提供指导，在正式操作前请确保软硬件环境均满足要求。
 
-硬件环境：
+**表1 硬件环境要求**
 
 |项目|说明|
 | :--- | :--- |
 | CPU | 鲲鹏920新型号处理器|
 
-软件环境：
+**表2 操作系统和软件环境要求**
 
 | 软件 | 版本 |
 | :--- | :--- |
@@ -28,12 +29,12 @@ sws\_scale函数是FFmpeg框架中libswscale库的核心函数之一，主要用
 
     ```bash
     git clone https://gitcode.com/boostkit/ffmpeg.git
-    cd ffmpeg
     ```
 
-2. 解压FFmpeg-7.1.1源码。
+2. 进入ffmpeg目录，解压FFmpeg-7.1.1源码。
 
     ```bash
+    cd ffmpeg
     tar -zxf ffmpeg-7.1.1.tar.gz 
     ```
 
@@ -65,18 +66,27 @@ sws\_scale函数是FFmpeg框架中libswscale库的核心函数之一，主要用
     export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
     ffmpeg -version
     ```
+
     如果输出了对应版本号，说明FFmpeg安装成功。
+
     ```bash
     ffmpeg version 7.1.1 Copyright (c) 2000-2025 the FFmpeg developers
     built with gcc 10.3.1 (GCC)
     ```
+
 ## 快速使用
 
-```bash
-# 使用YUV序列进行测试
-ffmpeg -s 640x480 -pix_fmt yuv420p -i input.yuv -pix_fmt rgb24 output.rgb
+1. 使用YUV序列进行测试。
 
-# 在当前目录检查是否有输出文件
-ls -lh output.rgb
-```
-执行测试命令，无错误信息且当前目录下有输出文件output.rgb，说明执行成功。
+    ```bash
+    ffmpeg -s 640x480 -pix_fmt yuv420p -i input.yuv -pix_fmt rgb24 output.rgb
+    ```
+
+2. 验证测试是否执行成功。
+
+    ```bash
+    ls -lh output.rgb
+    ```
+
+    如果无错误信息且当前目录下有输出文件output.rgb，说明执行成功。
+    
