@@ -1,18 +1,20 @@
-# FFmpeg-4.4.2_scale工具安装指南
+# 特性指南（FFmpeg-4.4.2）
 
-## 安装说明
+## 特性描述
 
-本文主要介绍FFmpeg-4.4.2 工具的编译安装以及如何使能优化补丁。
+该特性针对FFmpeg-4.4.2中的libswscale的bilinear，bicubic和lanczos三种缩放算法下进行的优化。主要通过不同场景的向量化定制改写，使能SVE向量化以及指令流水化等方法，提升当前缩放算法的性能。
 
-## 环境配置
+## 环境要求
 
-硬件环境：
+本文基于鲲鹏服务器和openEuler操作系统提供指导，在正式操作前请确保软硬件环境均满足要求。
+
+**表1 硬件环境要求**
 
 |项目|说明|
 | :--- | :--- |
 | CPU | 鲲鹏950处理器|
 
-软件环境：
+**表2 操作系统和软件环境要求**
 
 | 软件 | 版本 |
 | :--- | :--- |
@@ -21,9 +23,9 @@
 | make | >= 4.3 |
 | cmake | >= 3.22.0 |
 
-其他：
+## 前提条件
 
-sve长度需要设置为128，在openEuler 22.03 LTS SP4中可通过以下方式设置。
+长度需要设置为128，在openEuler 22.03 LTS SP4中可通过以下方式设置。
 
 ```shell
 echo 16 > /proc/sys/abi/sve_default_vector_length
@@ -31,13 +33,13 @@ echo 16 > /proc/sys/abi/sve_default_vector_length
 
 ## 编译安装
 
-1. 克隆本仓库，获取ffmpeg_4.4.2-optimize-scale.patch优化补丁。
+1. 克隆本仓库。
 
     ```bash
     git clone https://gitcode.com/boostkit/ffmpeg.git
     ```
 
-2. 获取ffmpeg-4.4.2 源码包，解压并进入源码目录。
+2. 获取FFmpeg-4.4.2源码包，解压并进入源码目录。
 
     ```bash
     wget https://ffmpeg.org/releases/ffmpeg-4.4.2.tar.gz
@@ -45,16 +47,15 @@ echo 16 > /proc/sys/abi/sve_default_vector_length
     cd ffmpeg-4.4.2
     ```
 
-3. 将对应路径中的优化patch合入到ffmpeg-4.4.2中。
+3. 将FFmpeg补丁合入到FFmpeg-4.4.2中。
 
     ```bash
     patch -p1 < /path/to/ffmpeg_4.4.2-optimize-scale.patch
     ```
 
-4. 执行编译。
+4. 执行编译。安装路径用户自行指定，这里以/home/path/to/ffmpegInstall为例。
 
-    ```bash
-    # 安装路径用户自行指定，这里以/home/path/to/ffmpegInstall为例
+    ```bash    
     ./configure \
     --prefix=/home/path/to/ffmpegInstall \
     --enable-shared \
@@ -83,17 +84,32 @@ echo 16 > /proc/sys/abi/sve_default_vector_length
     make install
     ```
 
-7. 配置环境变量，并验证ffmpeg安装是否成功。
+7. 配置环境变量，并验证FFmpeg安装是否成功。其中，lib路径是上述编译安装时指定的。
 
     ```bash
-    # 配置环境变量，lib路径是上述编译安装时指定的
     export LD_LIBRARY_PATH=/home/path/to/ffmpegInstall/lib:$LD_LIBRARY_PATH
     /home/path/to/ffmpegInstall/bin/ffmpeg -version
     ```
 
-    如果输出了对应版本号，说明ffmpeg安装成功。
+   如果输出了对应版本号，说明FFmpeg安装成功。
 
     ```bash
     ffmpeg version 4.4.2 Copyright (c) 2000-2021 the FFmpeg developers
     built with gcc 10.3.1 (GCC)
     ```
+
+## 快速使用
+
+1. 使用YUV序列进行测试。
+    
+    ```bash
+    taskset -c 88 /home/path/to/ffmpegInstall/bin/ffmpeg -f rawvideo -pix_fmt yuv420p -video_size 1920x1080 -i /home/path/to/video/Ca4_1920x1080.yuv -vf "scale=1280:720" -sws_flags "bilinear" -pix_fmt yuv420p -y output_1280x720.yuv
+    ```
+
+2. 验证测试是否执行成功。
+    
+    ```bash
+    ls -lh output_1280x720.yuv
+    ```
+
+    如果无错误信息且当前目录下有输出文件output_1280x720.yuv，说明执行成功。
