@@ -18,7 +18,7 @@
 ├──docs/                                                            # 项目文档目录
 │   ├── zh/                                                         # 中文文档目录
 │   │   ├── ffmpeg_4.4.2_scale_optimization_feature_guide.md        # 特性指南（FFmpeg-4.4.2）
-|   |   ├── fffmpeg_7.1.1_sws_scale_optimization_feature_guide.md   # 特性指南（FFmpeg-7.1.1）
+|   |   ├── ffmpeg_7.1.1_sws_scale_optimization_feature_guide.md   # 特性指南（FFmpeg-7.1.1）
 │   │   ├── LICENSE                                                 # 文档许可证
 ├──ffmpeg_4.4.2-optimize-scale.patch                                # FFmpeg-4.4.2 缩放算法优化补丁
 ├──huawei_ffmpeg-7.1.1_sws_scale_optimize.patch                     # FFmpeg-7.1.1 sws_scale函数优化补丁
