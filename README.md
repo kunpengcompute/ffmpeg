@@ -14,7 +14,7 @@
 
 ## 目录结构
 
-```bash
+```text
 ├──docs/                                                            # 项目文档目录
 │   ├── zh/                                                         # 中文文档目录
 │   │   ├── ffmpeg_4.4.2_scale_optimization_feature_guide.md        # 特性指南（FFmpeg-4.4.2）
