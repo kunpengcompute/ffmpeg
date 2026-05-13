@@ -2,7 +2,7 @@
 
 ## 特性描述
 
-该特性针对FFmpeg-4.4.2中的libswscale的bilinear，bicubic和lanczos三种缩放算法下进行的优化。主要通过不同场景的向量化定制改写，使能SVE向量化以及指令流水化等方法，提升当前缩放算法的性能。
+该特性针对FFmpeg-4.4.2中的libswscale的bilinear、bicubic和lanczos三种缩放算法下进行的优化。主要通过不同场景的向量化定制改写，使能SVE向量化以及指令流水化等方法，提升当前缩放算法的性能。
 
 ## 环境要求
 
@@ -25,7 +25,7 @@
 
 ## 前提条件
 
-长度需要设置为128，在openEuler 22.03 LTS SP4中可通过以下方式设置。
+SVE向量长度需要设置为128，在openEuler 22.03 LTS SP4中可通过以下方式设置。
 
 ```shell
 echo 16 > /proc/sys/abi/sve_default_vector_length

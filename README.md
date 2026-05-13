@@ -1,7 +1,7 @@
 # FFmpeg 介绍
 
 ## 最新消息
-* [2026.03.30]：基于鲲鹏服务器对FFmpeg-4.4.2中libswscale库的bilinear，bicubic和lanczos三种缩放算法进行性能优化。
+* [2026.03.30]：基于鲲鹏服务器对FFmpeg-4.4.2中libswscale库的bilinear、bicubic和lanczos三种缩放算法进行性能优化。
 * [2025.09.30]：基于鲲鹏服务器对FFmpeg-7.1.1中libswscale库的sws\_scale函数进行性能优化。
 
 ## 简介
@@ -10,7 +10,7 @@
 
 * FFmpeg-7.1.1 sws\_scale函数优化：sws\_scale函数是FFmpeg框架中libswscale库的核心函数之一，主要用于图像的缩放、色彩空间转换以及像素格式转换。色彩空间转换优化补丁通过并行优化色彩空间转换函数，实现性能提升。
 
-* FFmpeg-4.4.2 缩放算法优化：该补丁主要是针对FFmpeg-4.4.2中的libswscale的bilinear，bicubic和lanczos三种缩放算法下进行的优化。主要通过不同场景的向量化定制改写，使能SVE向量化以及指令流水化等方法，提升当前缩放算法的性能。
+* FFmpeg-4.4.2 缩放算法优化：主要针对FFmpeg-4.4.2中libswscale的bilinear、bicubic和lanczos三种缩放算法进行的优化。主要通过不同场景的向量化定制改写，使能SVE向量化以及指令流水化等方法，提升当前缩放算法的性能。
 
 ## 目录结构
 
@@ -34,7 +34,7 @@
 |特性|特性说明|链接|
 | :--- | :--- | :--- | 
 |FFmpeg-7.1.1 sws\_scale函数优化|针对FFmpeg-7.1.1中的sws\_scale函数进行优化|[FFmpeg-7.1.1 特性指南](./docs/zh/ffmpeg_7.1.1_sws_scale_optimization_feature_guide.md)|
-|FFmpge-4.4.2 缩放算法优化|针对FFmpeg-4.2.2中的bilinear，bicubic和lanczos三种缩放算法进行优化|[FFmpeg-4.4.2 特性指南](./docs/zh/ffmpeg_4.4.2_scale_optimization_feature_guide.md)|
+|FFmpge-4.4.2 缩放算法优化|针对FFmpeg-4.2.2中的bilinear、bicubic和lanczos三种缩放算法进行优化|[FFmpeg-4.4.2 特性指南](./docs/zh/ffmpeg_4.4.2_scale_optimization_feature_guide.md)|
 
 ## License
 
