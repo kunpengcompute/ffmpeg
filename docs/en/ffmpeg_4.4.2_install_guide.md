@@ -6,13 +6,13 @@ This document describes how to compile and install the FFmpeg-4.4.2 tool and how
 
 ## Environment Configuration
 
-Hardware environment:
+**Hardware Environment**
 
 |Item|Description|
 | :--- | :--- |
 | CPU | Kunpeng 950|
 
-Software environment:
+**Software Environment**
 
 | Software| Version|
 | :--- | :--- |
