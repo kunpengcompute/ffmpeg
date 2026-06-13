@@ -1574,7 +1574,7 @@ index eecbea8..702a070 100644
 +}
 \ No newline at end of file
 diff --git a/libswscale/hscale.c b/libswscale/hscale.c
-index eca0635..3e9010a 100644
+index eca0635..c4c983f 100644
 --- a/libswscale/hscale.c
 +++ b/libswscale/hscale.c
 @@ -25,6 +25,7 @@ typedef struct FilterContext
@@ -1592,7 +1592,7 @@ index eca0635..3e9010a 100644
 -
          if (c->hyscale_fast) {
              c->hyscale_fast(c, (int16_t*)dst[dst_pos], dstW, src[src_pos], srcW, xInc);
-+        } else if (c->optLevel != 0) {
++        } else if (c->optLevel != 0 && c->hyScaleOpt != NULL) {
 +            c->hyScaleOpt(c, (int16_t*)dst[dst_pos], dstW, (const uint8_t *)src[src_pos], instance->filter,
 +                       instance->srcpos_offset, c->optFlag);
          } else {
@@ -1619,7 +1619,7 @@ index eca0635..3e9010a 100644
      for (i = 0; i < sliceH; ++i) {
          if (c->hcscale_fast) {
              c->hcscale_fast(c, (uint16_t*)dst1[dst_pos1+i], (uint16_t*)dst2[dst_pos2+i], dstW, src1[src_pos1+i], src2[src_pos2+i], srcW, xInc);
-+        } else if (c->optLevel != 0) {
++        } else if (c->optLevel != 0 && c->hcScaleOpt != NULL) {
 +            c->hcScaleOpt(c, (uint16_t*)dst1[dst_pos1+i], dstW, src1[src_pos1+i], instance->filter, instance->srcpos_offset, c->optFlag);
 +            c->hcScaleOpt(c, (uint16_t*)dst2[dst_pos2+i], dstW, src2[src_pos2+i], instance->filter, instance->srcpos_offset, c->optFlag);
          } else {
