@@ -1,6 +1,6 @@
 diff -uprN tmp/ffmpeg-4.2.2/configure ffmpeg-4.2.2/configure
 --- tmp/ffmpeg-4.2.2/configure	2020-01-01 05:35:22.000000000 +0800
-+++ ffmpeg-4.2.2/configure	2020-09-21 21:26:18.552000000 +0800
++++ ffmpeg-4.2.2/configure	2026-06-18 14:55:19.859535650 +0800
 @@ -282,6 +282,7 @@ External library support:
    --enable-libwebp         enable WebP encoding via libwebp [no]
    --enable-libx264         enable H.264 encoding via x264 [no]
@@ -25,7 +25,7 @@ diff -uprN tmp/ffmpeg-4.2.2/configure ffmpeg-4.2.2/configure
  libxavs_encoder_deps="libxavs"
  libxavs2_encoder_deps="libxavs2"
  libxvid_encoder_deps="libxvid"
-@@ -6310,6 +6313,7 @@ enabled libx264            &&{ check_pkg
+@@ -6310,6 +6313,7 @@ enabled libx264           && { check_pkg
                               check_cpp_condition libx262 x264.h "X264_MPEG2"
  enabled libx265           && require_pkg_config libx265 x265 x265.h x265_api_get &&
                               require_cpp_condition libx265 x265.h "X265_BUILD >= 68"
@@ -35,7 +35,7 @@ diff -uprN tmp/ffmpeg-4.2.2/configure ffmpeg-4.2.2/configure
  enabled libxvid           && require libxvid xvid.h xvid_global -lxvidcore
 diff -uprN tmp/ffmpeg-4.2.2/libavcodec/allcodecs.c ffmpeg-4.2.2/libavcodec/allcodecs.c
 --- tmp/ffmpeg-4.2.2/libavcodec/allcodecs.c	2020-01-01 05:35:23.000000000 +0800
-+++ ffmpeg-4.2.2/libavcodec/allcodecs.c	2020-09-11 17:58:16.768000000 +0800
++++ ffmpeg-4.2.2/libavcodec/allcodecs.c	2026-06-18 14:55:19.859535650 +0800
 @@ -724,6 +724,7 @@ extern AVCodec ff_libx262_encoder;
  extern AVCodec ff_libx264_encoder;
  extern AVCodec ff_libx264rgb_encoder;
@@ -46,8 +46,8 @@ diff -uprN tmp/ffmpeg-4.2.2/libavcodec/allcodecs.c ffmpeg-4.2.2/libavcodec/allco
  extern AVCodec ff_libxvid_encoder;
 diff -uprN tmp/ffmpeg-4.2.2/libavcodec/libhw265.c ffmpeg-4.2.2/libavcodec/libhw265.c
 --- tmp/ffmpeg-4.2.2/libavcodec/libhw265.c	1970-01-01 08:00:00.000000000 +0800
-+++ ffmpeg-4.2.2/libavcodec/libhw265.c	2020-09-21 21:32:29.276000000 +0800
-@@ -0,0 +1,502 @@
++++ ffmpeg-4.2.2/libavcodec/libhw265.c	2026-06-18 14:56:51.083535650 +0800
+@@ -0,0 +1,509 @@
 +/*
 + * HW265 encoder library plugin for FFmpeg
 + *
@@ -114,6 +114,8 @@ diff -uprN tmp/ffmpeg-4.2.2/libavcodec/libhw265.c ffmpeg-4.2.2/libavcodec/libhw2
 +    int delayTime;
 +
 +    int analysisThreadNum;
++    int mctf;
++    int mctfSpeed;
 +
 +    int pass;
 +    int initQP;
@@ -337,6 +339,9 @@ diff -uprN tmp/ffmpeg-4.2.2/libavcodec/libhw265.c ffmpeg-4.2.2/libavcodec/libhw2
 +        ctx->creatParams.preAnalysisParam.enableMbTree;
 +    ctx->creatParams.preAnalysisParam.analysisThreadNum =
 +        (ctx->analysisThreadNum >= 0) ? ctx->analysisThreadNum : ctx->creatParams.preAnalysisParam.analysisThreadNum;
++    ctx->creatParams.preAnalysisParam.mctf = ctx->mctf >= 0 ? ctx->mctf : ctx->creatParams.preAnalysisParam.mctf;
++    ctx->creatParams.preAnalysisParam.mctfSpeed = ctx->mctfSpeed >= 0 ?
++        ctx->mctfSpeed : ctx->creatParams.preAnalysisParam.mctfSpeed;
 +    ctx->creatParams.h265eCodecParam.enableRefBframe =
 +        (ctx->enableRefBframe >= 0) ? ctx->enableRefBframe : ctx->creatParams.h265eCodecParam.enableRefBframe;
 +    ctx->creatParams.h265eCodecParam.frameThreadNum =
@@ -498,6 +503,8 @@ diff -uprN tmp/ffmpeg-4.2.2/libavcodec/libhw265.c ffmpeg-4.2.2/libavcodec/libhw2
 +    {"delay",             "Number of frames for encoder analysis[bframes, 150], default 25",           OFFSET(delayFrameNum),           AV_OPT_TYPE_INT,      {.i64 =  -1}, -1, INT_MAX, VE},
 +    {"adap_I",            "Adaptive insert I frames base on scenecut. 0:off 1:on, default 1",          OFFSET(enableAdaptiveIframe),    AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       1, VE},
 +    {"analysis_threads",  "Number of frames for concurrent analysis. [1, 48], default 5",              OFFSET(analysisThreadNum),       AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,      48, VE},
++    {"mctf",              "Motion Compensated Temporal Filtering. 0:off 1:on, default 0",              OFFSET(mctf),                    AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       1, VE},
++    {"mctf_speed",        "MCTF speed level. 0:QUALITY 1:BALANCED 2:REALTIME, default 2",              OFFSET(mctfSpeed),               AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       2, VE},
 +    {"bframe_ref",        "B frames used as reference frame. 0:off 1:on, default 1",                   OFFSET(enableRefBframe),         AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       1, VE},
 +    {"frame_threads",     "Number of concurrently encoded frame threads[1, 38], default 12",           OFFSET(frameThreadNum),          AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,      38, VE},
 +    {"wpp_threads",       "Number of concurrently encoded rows threads[1, 20], default 8",             OFFSET(wppThreadNum),            AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,      20, VE},
@@ -552,8 +559,8 @@ diff -uprN tmp/ffmpeg-4.2.2/libavcodec/libhw265.c ffmpeg-4.2.2/libavcodec/libhw2
 +};
 diff -uprN tmp/ffmpeg-4.2.2/libavcodec/Makefile ffmpeg-4.2.2/libavcodec/Makefile
 --- tmp/ffmpeg-4.2.2/libavcodec/Makefile	2020-01-01 05:35:22.000000000 +0800
-+++ ffmpeg-4.2.2/libavcodec/Makefile	2020-09-11 17:58:24.864000000 +0800
-@@ -1007,6 +1007,7 @@
++++ ffmpeg-4.2.2/libavcodec/Makefile	2026-06-18 14:55:19.859535650 +0800
+@@ -1007,6 +1007,7 @@ OBJS-$(CONFIG_LIBWEBP_ANIM_ENCODER)
  OBJS-$(CONFIG_LIBX262_ENCODER)            += libx264.o
  OBJS-$(CONFIG_LIBX264_ENCODER)            += libx264.o
  OBJS-$(CONFIG_LIBX265_ENCODER)            += libx265.o
