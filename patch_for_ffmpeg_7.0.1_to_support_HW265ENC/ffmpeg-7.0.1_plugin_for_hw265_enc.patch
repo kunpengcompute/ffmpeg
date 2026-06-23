@@ -547,7 +547,7 @@ diff -uprN tmp/ffmpeg-7.0.1/libavcodec/libhw265.c ffmpeg-7.0.1/libavcodec/libhw2
 +    {"enableDelayTimeControl",  "Enable Time-Domain Analysis Wait Time Control. 0:off 1:on, default 0", OFFSET(enableDelayTimeControl), AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       1, VE},
 +    {"adap_B",             "Adaptive insert B frames. [0, 3], default 1",                              OFFSET(adaptiveBframe),          AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       3, VE},
 +    {"pvc_mode",           "PVC mode:0 off, 1:perceive set-bitrate, 2:perceive src-bitrate, default 0", OFFSET(pvcMode),                AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       2, VE},
-+    {"pvc_display_type",    "PVC dispaly type: 0:phone, 1:TV, default 0",                               OFFSET(pvcDisplayType),         AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       1, VE},
++    {"pvc_display_type",    "PVC display type: 0:phone, 1:TV, default 0",                               OFFSET(pvcDisplayType),         AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       1, VE},
 +    {"pvc_strength",       "PVC strength: 0:strong, 1:medium, 2:weak, default 0",                       OFFSET(pvcStrength),            AV_OPT_TYPE_INT,      {.i64 =  -1}, -1,       2, VE},
 +    {NULL}
 +};
