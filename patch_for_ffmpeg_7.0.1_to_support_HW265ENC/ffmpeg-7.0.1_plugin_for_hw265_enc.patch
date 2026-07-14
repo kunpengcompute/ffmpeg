@@ -230,10 +230,10 @@ index 0000000..6aa8a22
 +#endif
 diff --git a/libavcodec/generateMetadataHDRVivid.c b/libavcodec/generateMetadataHDRVivid.c
 new file mode 100644
-index 0000000..d882c6d
+index 0000000..bfa7982
 --- /dev/null
 +++ b/libavcodec/generateMetadataHDRVivid.c
-@@ -0,0 +1,3553 @@
+@@ -0,0 +1,3649 @@
 +/*
 + * Copyright (c) Huawei Technologies Co., Ltd. 2020-2022. All rights reserved.
 + * Licensed under the Code Sharing Policy of the UHD World Association (the "Policy");
@@ -461,8 +461,8 @@ index 0000000..d882c6d
 +    GetYUVBuffer(&metedataBuf->FixedFile444P, metedataBuf->width, metedataBuf->height, Fixed, YUV444);
 +    GetYUVBuffer(&metedataBuf->FloatFile444P, metedataBuf->width, metedataBuf->height, Float, YUV444);
 +    GetYUVBuffer(&metedataBuf->FloatFile420P, metedataBuf->width, metedataBuf->height, Float, YUV420);
-+    metedataBuf->Fixed32Data = (long *) malloc(
-+            sizeof(long) * (metedataBuf->width) * (metedataBuf->height) * 2);
++    metedataBuf->Fixed32Data = (int32_t *) malloc(
++            sizeof(int32_t) * (metedataBuf->width) * (metedataBuf->height) * 2);
 +    metedataBuf->HDRVividBitStream1.fifo = (uint8_t *) malloc(sizeof(uint8_t) * MIN_FIFO_SIZE);
 +    metedataBuf->last_floatComp = (float*)malloc(metedataBuf->width * metedataBuf->height * 4 * sizeof(float));    
 +}
@@ -3677,70 +3677,166 @@ index 0000000..d882c6d
 +}
 +
 +static void YUV420to444(GenerateMetadataBuffer *metedataBuf, const YUVPicBuffer *In, YUVPicBuffer *out) {
-+    long Fixed32Filter[4][4];
-+    Fixed32Filter[0][0] = (long) fRound(-8.0);
-+    Fixed32Filter[0][1] = (long) fRound(64.0);
-+    Fixed32Filter[0][2] = (long) fRound(216.0);
-+    Fixed32Filter[0][3] = (long) fRound(-16.0);
-+    Fixed32Filter[1][0] = (long) fRound(-16.0);
-+    Fixed32Filter[1][1] = (long) fRound(216.0);
-+    Fixed32Filter[1][2] = (long) fRound(64.0);
-+    Fixed32Filter[1][3] = (long) fRound(-8.0);
-+    Fixed32Filter[2][0] = (long) fRound(0.0);
-+    Fixed32Filter[2][1] = (long) fRound(256.0);
-+    Fixed32Filter[3][0] = (long) fRound(-10.0);
-+    Fixed32Filter[3][1] = (long) fRound(138.0);
-+    Fixed32Filter[3][2] = (long) fRound(138.0);
-+    Fixed32Filter[3][3] = (long) fRound(-10.0);
++    /* Filter taps are constants: use compile-time literals instead of calling
++     * fRound (which invokes floor/fabs/sign) on every invocation. */
++    static const int32_t Fixed32Filter[4][4] = {
++        {  -8,  64, 216, -16 },
++        { -16, 216,  64,  -8 },
++        {   0, 256,   0,   0 },
++        { -10, 138, 138, -10 }
++    };
 +
 +    memcpy(out->FixedChannel[0], In->FixedChannel[0], (int) (out->channel_num[0]) * sizeof(uint8));
 +    for (int k = 1; k <= 2; k++) {
-+        uint8 *outFile = out->FixedChannel[k];
-+        uint8 *inpFile = In->FixedChannel[k];
-+        for (int j = 0; j < (out->pic_height[k]) / 2; j++) {
-+            for (int i = 0; i < (out->pic_width[k]) / 2; i++) {
-+                {
-+                    int m;
-+                    int value = 0;
-+                    for (m = 0; m < 4; m++) {
-+                        value += Fixed32Filter[0][m] * inpFile[i + iClip(j + m - 2, 0, (out->pic_height[k]) / 2 - 1) *
-+                                                                   ((out->pic_width[k]) / 2)];
-+                    }
-+                    metedataBuf->Fixed32Data[(2 * j) * ((out->pic_width[k]) / 2) + i] = (value + 0) >> 0;
-+                }
-+                {
-+                    int m;
-+                    int value = 0;
-+                    for (m = 0; m < 4; m++) {
-+                        value += Fixed32Filter[1][m] * inpFile[i +
-+                                                               iClip(j + 1 + m - 2, 0, (out->pic_height[k]) / 2 - 1) *
-+                                                               ((out->pic_width[k]) / 2)];
-+                    }
-+                    metedataBuf->Fixed32Data[(2 * j + 1) * ((out->pic_width[k]) / 2) + i] = (value + 0) >> 0;
-+                }
++        const int halfW = out->pic_width[k]  / 2;
++        const int halfH = out->pic_height[k] / 2;
++        const int fullW = out->pic_width[k];
++        const int fullH = out->pic_height[k];
++        uint8       *const outFile = out->FixedChannel[k];
++        const uint8 *const inpFile = In->FixedChannel[k];
++        int32_t     *const buf     = metedataBuf->Fixed32Data;
++
++        const int32_t f0_0 = Fixed32Filter[0][0], f0_1 = Fixed32Filter[0][1];
++        const int32_t f0_2 = Fixed32Filter[0][2], f0_3 = Fixed32Filter[0][3];
++        const int32_t f1_0 = Fixed32Filter[1][0], f1_1 = Fixed32Filter[1][1];
++        const int32_t f1_2 = Fixed32Filter[1][2], f1_3 = Fixed32Filter[1][3];
++
++        /* =============== Vertical pass: halfW x halfH -> halfW x fullH =============== */
++        /* Even output row (2j) uses source rows [j-2, j-1, j, j+1] with filter[0].
++         * Odd  output row (2j+1) uses source rows [j-1, j, j+1, j+2] with filter[1].
++         * Rows j-1, j, j+1 are shared between even and odd — load only 5 unique rows. */
++        for (int j = 0; j < halfH; j++) {
++            const uint8 *rowA = inpFile + (long) iClip(j - 2, 0, halfH - 1) * halfW;
++            const uint8 *rowB = inpFile + (long) iClip(j - 1, 0, halfH - 1) * halfW;
++            const uint8 *rowC = inpFile + (long) iClip(j,     0, halfH - 1) * halfW;
++            const uint8 *rowD = inpFile + (long) iClip(j + 1, 0, halfH - 1) * halfW;
++            const uint8 *rowE = inpFile + (long) iClip(j + 2, 0, halfH - 1) * halfW;
++
++            int32_t *bufEven = buf + (long) (2 * j)     * halfW;
++            int32_t *bufOdd  = buf + (long) (2 * j + 1) * halfW;
++
++            int i = 0;
++            /* NEON: process 8 columns per iteration (two int32x4 halves). */
++            for (; i + 8 <= halfW; i += 8) {
++                uint8x8_t va = vld1_u8(rowA + i);
++                uint8x8_t vb = vld1_u8(rowB + i);
++                uint8x8_t vc = vld1_u8(rowC + i);
++                uint8x8_t vd = vld1_u8(rowD + i);
++                uint8x8_t ve = vld1_u8(rowE + i);
++
++                /* Widen u8x8 -> u16x8 -> (split) -> u32x4 -> reinterpret s32x4 */
++                int32x4_t aLo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16 (vmovl_u8(va))));
++                int32x4_t aHi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(vmovl_u8(va))));
++                int32x4_t bLo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16 (vmovl_u8(vb))));
++                int32x4_t bHi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(vmovl_u8(vb))));
++                int32x4_t cLo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16 (vmovl_u8(vc))));
++                int32x4_t cHi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(vmovl_u8(vc))));
++                int32x4_t dLo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16 (vmovl_u8(vd))));
++                int32x4_t dHi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(vmovl_u8(vd))));
++                int32x4_t eLo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16 (vmovl_u8(ve))));
++                int32x4_t eHi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(vmovl_u8(ve))));
++
++                /* Even: f0_0*A + f0_1*B + f0_2*C + f0_3*D */
++                int32x4_t evenLo = vmlaq_n_s32(vmulq_n_s32(aLo, f0_0), bLo, f0_1);
++                evenLo = vmlaq_n_s32(evenLo, cLo, f0_2);
++                evenLo = vmlaq_n_s32(evenLo, dLo, f0_3);
++                int32x4_t evenHi = vmlaq_n_s32(vmulq_n_s32(aHi, f0_0), bHi, f0_1);
++                evenHi = vmlaq_n_s32(evenHi, cHi, f0_2);
++                evenHi = vmlaq_n_s32(evenHi, dHi, f0_3);
++
++                /* Odd: f1_0*B + f1_1*C + f1_2*D + f1_3*E */
++                int32x4_t oddLo = vmlaq_n_s32(vmulq_n_s32(bLo, f1_0), cLo, f1_1);
++                oddLo = vmlaq_n_s32(oddLo, dLo, f1_2);
++                oddLo = vmlaq_n_s32(oddLo, eLo, f1_3);
++                int32x4_t oddHi = vmlaq_n_s32(vmulq_n_s32(bHi, f1_0), cHi, f1_1);
++                oddHi = vmlaq_n_s32(oddHi, dHi, f1_2);
++                oddHi = vmlaq_n_s32(oddHi, eHi, f1_3);
++
++                vst1q_s32(bufEven + i,     evenLo);
++                vst1q_s32(bufEven + i + 4, evenHi);
++                vst1q_s32(bufOdd  + i,     oddLo);
++                vst1q_s32(bufOdd  + i + 4, oddHi);
++            }
++            /* Scalar tail */
++            for (; i < halfW; i++) {
++                bufEven[i] = f0_0 * rowA[i] + f0_1 * rowB[i] + f0_2 * rowC[i] + f0_3 * rowD[i];
++                bufOdd[i]  = f1_0 * rowB[i] + f1_1 * rowC[i] + f1_2 * rowD[i] + f1_3 * rowE[i];
 +            }
 +        }
-+        for (int j = 0; j < out->pic_height[k]; j++) {
-+            for (int i = 0; i < (out->pic_width[k]) / 2; i++) {
++
++        /* =============== Horizontal pass: halfW x fullH -> fullW x fullH =============== */
++        const int32_t f3_0 = Fixed32Filter[3][0], f3_1 = Fixed32Filter[3][1];
++        const int32_t f3_2 = Fixed32Filter[3][2], f3_3 = Fixed32Filter[3][3];
++        const int last = halfW - 1;
++
++        if (halfW >= 8) {
++            for (int j = 0; j < fullH; j++) {
++                const int32_t *bufRow = buf    + (long) j * halfW;
++                uint8         *outRow = outFile + (long) j * fullW;
++
++                /* i = 0 (scalar edge: c0 clips to 0) */
 +                {
-+                    int m;
-+                    int value = 0;
-+                    for (m = 0; m < 2; m++) {
-+                        value += Fixed32Filter[2][m] * metedataBuf->Fixed32Data[j * ((out->pic_width[k]) / 2) +
-+                                                                                iClip(i + m - 1, 0,
-+                                                                                      ((out->pic_width[k]) / 2) - 1)];
-+                    }
-+                    outFile[j * (out->pic_width[k]) + 2 * i] = (value + 32768) >> 16;
++                    int32_t v = bufRow[0];
++                    outRow[0] = (uint8) ((256 * v + 32768) >> 16);
++                    outRow[1] = (uint8) (((f3_0 + f3_1) * v + f3_2 * bufRow[1]
++                                          + f3_3 * bufRow[2] + 32768) >> 16);
 +                }
-+                {
-+                    int m;
-+                    int value = 0;
-+                    for (m = 0; m < 4; m++) {
-+                        value += Fixed32Filter[3][m] * metedataBuf->Fixed32Data[j * ((out->pic_width[k]) / 2) +
-+                                                                                iClip(i + 1 + m - 2, 0,
-+                                                                                      ((out->pic_width[k]) / 2) - 1)];
-+                    }
-+                    outFile[j * (out->pic_width[k]) + 2 * i + 1] = (value + 32768) >> 16;
++
++                /* NEON bulk: 4 (even,odd) pairs = 8 output bytes per iteration.
++                 * Sliding window: v0=[i-1..i+2], v1=[i..i+3], v2=[i+1..i+4], v3=[i+2..i+5].
++                 * Constraint: i >= 1 (for v0) and i+3 <= last-2 (bulk bound) ⇒ i <= last-5. */
++                int i = 1;
++                for (; i + 3 <= last - 2; i += 4) {
++                    int32x4_t v0 = vld1q_s32(bufRow + i - 1);
++                    int32x4_t v1 = vld1q_s32(bufRow + i);
++                    int32x4_t v2 = vld1q_s32(bufRow + i + 1);
++                    int32x4_t v3 = vld1q_s32(bufRow + i + 2);
++
++                    /* Odd column: f3_0*v0 + f3_1*v1 + f3_2*v2 + f3_3*v3, then round */
++                    int32x4_t odd = vmlaq_n_s32(vmulq_n_s32(v0, f3_0), v1, f3_1);
++                    odd = vmlaq_n_s32(odd, v2, f3_2);
++                    odd = vmlaq_n_s32(odd, v3, f3_3);
++                    odd = vshrq_n_s32(vaddq_s32(odd, vdupq_n_s32(32768)), 16);
++
++                    /* Even column: 256 * bufRow[i..i+3], then round */
++                    int32x4_t even = vmulq_n_s32(v1, 256);
++                    even = vshrq_n_s32(vaddq_s32(even, vdupq_n_s32(32768)), 16);
++
++                    /* Narrow s32x4 -> s16x4, interleave [e,o,e,o,...], narrow to u8x8 */
++                    int16x4_t even16 = vqmovn_s32(even);
++                    int16x4_t odd16  = vqmovn_s32(odd);
++                    int16x4x2_t zip  = vzip_s16(even16, odd16);
++                    int16x8_t combined = vcombine_s16(zip.val[0], zip.val[1]);
++                    uint8x8_t result = vqmovun_s16(combined);
++
++                    vst1_u8(outRow + 2 * i, result);
++                }
++
++                /* Scalar tail: remaining bulk + right edges (i = last-1, last) */
++                for (; i <= last; i++) {
++                    int32_t v = bufRow[i];
++                    int c0 = iClip(i - 1, 0, last);
++                    int c2 = iClip(i + 1, 0, last);
++                    int c3 = iClip(i + 2, 0, last);
++                    outRow[2 * i]     = (uint8) ((256 * v + 32768) >> 16);
++                    outRow[2 * i + 1] = (uint8) ((f3_0 * bufRow[c0] + f3_1 * v
++                                                  + f3_2 * bufRow[c2] + f3_3 * bufRow[c3]
++                                                  + 32768) >> 16);
++                }
++            }
++        } else {
++            /* Narrow-image fallback (halfW < 8): pure scalar with iClip. */
++            for (int j = 0; j < fullH; j++) {
++                const int32_t *bufRow = buf    + (long) j * halfW;
++                uint8         *outRow = outFile + (long) j * fullW;
++                for (int i = 0; i < halfW; i++) {
++                    int c0 = iClip(i - 1, 0, last);
++                    int c2 = iClip(i + 1, 0, last);
++                    int c3 = iClip(i + 2, 0, last);
++                    outRow[2 * i]     = (uint8) ((256 * bufRow[i] + 32768) >> 16);
++                    outRow[2 * i + 1] = (uint8) ((f3_0 * bufRow[c0] + f3_1 * bufRow[i]
++                                                  + f3_2 * bufRow[c2] + f3_3 * bufRow[c3]
++                                                  + 32768) >> 16);
 +                }
 +            }
 +        }
@@ -3789,7 +3885,7 @@ index 0000000..d882c6d
 +}
 diff --git a/libavcodec/generateMetadataHDRVivid.h b/libavcodec/generateMetadataHDRVivid.h
 new file mode 100644
-index 0000000..a0690f7
+index 0000000..3b7d607
 --- /dev/null
 +++ b/libavcodec/generateMetadataHDRVivid.h
 @@ -0,0 +1,200 @@
@@ -3980,7 +4076,7 @@ index 0000000..a0690f7
 +	YUVPicBuffer FixedFile444P;
 +	YUVPicBuffer FloatFile444P;
 +	YUVPicBuffer FloatFile420P;	
-+    long* Fixed32Data;
++    int32_t* Fixed32Data;
 +	unsigned char meteType;
 +	HDRVividBitStream HDRVividBitStream1;
 +}GenerateMetadataBuffer;
