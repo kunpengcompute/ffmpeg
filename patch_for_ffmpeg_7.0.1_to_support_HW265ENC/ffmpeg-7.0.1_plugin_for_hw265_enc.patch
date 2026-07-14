@@ -61,7 +61,7 @@ index 2386b45..d964e6c 100644
  extern const FFCodec ff_libxavs_encoder;
 diff --git a/libavcodec/defines.h b/libavcodec/defines.h
 new file mode 100644
-index 0000000..b800c54
+index 0000000..6aa8a22
 --- /dev/null
 +++ b/libavcodec/defines.h
 @@ -0,0 +1,163 @@
@@ -99,7 +99,7 @@ index 0000000..b800c54
 +#define NUM_PROCESS                               1129
 +#define TONE_MAPPING_SPEC_METADATA_FILTER_JUMP     8
 +#define MIN_FIFO_SIZE 1000
-+#define HLG                                        1
++#define HLG                                        0
 +#pragma once
 +
 +//Data Type Definitions
@@ -230,10 +230,10 @@ index 0000000..b800c54
 +#endif
 diff --git a/libavcodec/generateMetadataHDRVivid.c b/libavcodec/generateMetadataHDRVivid.c
 new file mode 100644
-index 0000000..64871e3
+index 0000000..d882c6d
 --- /dev/null
 +++ b/libavcodec/generateMetadataHDRVivid.c
-@@ -0,0 +1,3484 @@
+@@ -0,0 +1,3553 @@
 +/*
 + * Copyright (c) Huawei Technologies Co., Ltd. 2020-2022. All rights reserved.
 + * Licensed under the Code Sharing Policy of the UHD World Association (the "Policy");
@@ -263,6 +263,7 @@ index 0000000..64871e3
 +#include <string.h>
 +#include <stdlib.h>
 +#include <math.h>
++#include <arm_neon.h>
 +
 +static inline int iMin(int a, int b) {
 +    return ((a) < (b)) ? (a) : (b);
@@ -2775,57 +2776,134 @@ index 0000000..64871e3
 +    }
 +}
 +
++
++
 +static float CalPearson(GenerateMetadataBuffer *metedataBuf, float *RGB[3], int size) {
-+    float sumx = 0.0;
-+    float sumy = 0.0;
-+    float sumxy = 0.0;
-+    float sumx2 = 0.0;
-+    float sumy2 = 0.0;
++    float sumx = 0.0f;
++    float sumy = 0.0f;
++    float sumxy = 0.0f;
++    float sumx2 = 0.0f;
++    float sumy2 = 0.0f;
 +
-+    float *lastFrame = (float *) malloc(size * 3 * sizeof(float));
-+    float *currentFrame = (float *) malloc(size * 3 * sizeof(float));
++    unsigned int picSize = metedataBuf->width * metedataBuf->height;
 +
-+    if (lastFrame == NULL || currentFrame == NULL) {
-+        // 内存分配失败，返回错误值或处理错误
-+        return 0.0;
++    const float *x0_base = metedataBuf->last_floatComp;
++    const float *x1_base = x0_base + picSize;
++    const float *x2_base = x0_base + 2 * picSize;
++
++    const float *y0_base = RGB[0];
++    const float *y1_base = RGB[1];
++    const float *y2_base = RGB[2];
++
++    int i = 0;
++    int vec_size = size & ~7; 
++
++    if (vec_size > 0) {
++        float32x4_t vsumx0 = vdupq_n_f32(0.0f);
++        float32x4_t vsumx1 = vdupq_n_f32(0.0f);
++        float32x4_t vsumy0 = vdupq_n_f32(0.0f);
++        float32x4_t vsumy1 = vdupq_n_f32(0.0f);
++        
++        float32x4_t vsumxy0 = vdupq_n_f32(0.0f);
++        float32x4_t vsumxy1 = vdupq_n_f32(0.0f);
++        float32x4_t vsumx2_0 = vdupq_n_f32(0.0f);
++        float32x4_t vsumx2_1 = vdupq_n_f32(0.0f);
++        float32x4_t vsumy2_0 = vdupq_n_f32(0.0f);
++        float32x4_t vsumy2_1 = vdupq_n_f32(0.0f);
++
++        for (; i < vec_size; i += 8) {
++            float32x4_t vx0_0 = vld1q_f32(x0_base + i);
++            float32x4_t vx1_0 = vld1q_f32(x1_base + i);
++            float32x4_t vx2_0 = vld1q_f32(x2_base + i);
++            float32x4_t vy0_0 = vld1q_f32(y0_base + i);
++            float32x4_t vy1_0 = vld1q_f32(y1_base + i);
++            float32x4_t vy2_0 = vld1q_f32(y2_base + i);
++            float32x4_t vx0_1 = vld1q_f32(x0_base + i + 4);
++            float32x4_t vx1_1 = vld1q_f32(x1_base + i + 4);
++            float32x4_t vx2_1 = vld1q_f32(x2_base + i + 4);
++            float32x4_t vy0_1 = vld1q_f32(y0_base + i + 4);
++            float32x4_t vy1_1 = vld1q_f32(y1_base + i + 4);
++            float32x4_t vy2_1 = vld1q_f32(y2_base + i + 4);
++
++            vsumx0 = vaddq_f32(vsumx0, vx0_0);
++            vsumx1 = vaddq_f32(vsumx1, vx0_1);
++            vsumx0 = vaddq_f32(vsumx0, vx1_0);
++            vsumx1 = vaddq_f32(vsumx1, vx1_1);
++            vsumx0 = vaddq_f32(vsumx0, vx2_0);
++            vsumx1 = vaddq_f32(vsumx1, vx2_1);
++
++            vsumy0 = vaddq_f32(vsumy0, vy0_0);
++            vsumy1 = vaddq_f32(vsumy1, vy0_1);
++            vsumy0 = vaddq_f32(vsumy0, vy1_0);
++            vsumy1 = vaddq_f32(vsumy1, vy1_1);
++            vsumy0 = vaddq_f32(vsumy0, vy2_0);
++            vsumy1 = vaddq_f32(vsumy1, vy2_1);
++
++            vsumxy0 = vmlaq_f32(vsumxy0, vx0_0, vy0_0);
++            vsumxy1 = vmlaq_f32(vsumxy1, vx0_1, vy0_1);
++            vsumxy0 = vmlaq_f32(vsumxy0, vx1_0, vy1_0);
++            vsumxy1 = vmlaq_f32(vsumxy1, vx1_1, vy1_1);
++            vsumxy0 = vmlaq_f32(vsumxy0, vx2_0, vy2_0);
++            vsumxy1 = vmlaq_f32(vsumxy1, vx2_1, vy2_1);
++
++            vsumx2_0 = vmlaq_f32(vsumx2_0, vx0_0, vx0_0);
++            vsumx2_1 = vmlaq_f32(vsumx2_1, vx0_1, vx0_1);
++            vsumx2_0 = vmlaq_f32(vsumx2_0, vx1_0, vx1_0);
++            vsumx2_1 = vmlaq_f32(vsumx2_1, vx1_1, vx1_1);
++            vsumx2_0 = vmlaq_f32(vsumx2_0, vx2_0, vx2_0);
++            vsumx2_1 = vmlaq_f32(vsumx2_1, vx2_1, vx2_1);
++
++            vsumy2_0 = vmlaq_f32(vsumy2_0, vy0_0, vy0_0);
++            vsumy2_1 = vmlaq_f32(vsumy2_1, vy0_1, vy0_1);
++            vsumy2_0 = vmlaq_f32(vsumy2_0, vy1_0, vy1_0);
++            vsumy2_1 = vmlaq_f32(vsumy2_1, vy1_1, vy1_1);
++            vsumy2_0 = vmlaq_f32(vsumy2_0, vy2_0, vy2_0);
++            vsumy2_1 = vmlaq_f32(vsumy2_1, vy2_1, vy2_1);
++        }
++
++        vsumx0 = vaddq_f32(vsumx0, vsumx1);
++        vsumy0 = vaddq_f32(vsumy0, vsumy1);
++        vsumxy0 = vaddq_f32(vsumxy0, vsumxy1);
++        vsumx2_0 = vaddq_f32(vsumx2_0, vsumx2_1);
++        vsumy2_0 = vaddq_f32(vsumy2_0, vsumy2_1);
++
++        sumx = vgetq_lane_f32(vsumx0, 0) + vgetq_lane_f32(vsumx0, 1) + vgetq_lane_f32(vsumx0, 2) + vgetq_lane_f32(vsumx0, 3);
++        sumy = vgetq_lane_f32(vsumy0, 0) + vgetq_lane_f32(vsumy0, 1) + vgetq_lane_f32(vsumy0, 2) + vgetq_lane_f32(vsumy0, 3);
++        sumxy = vgetq_lane_f32(vsumxy0, 0) + vgetq_lane_f32(vsumxy0, 1) + vgetq_lane_f32(vsumxy0, 2) + vgetq_lane_f32(vsumxy0, 3);
++        sumx2 = vgetq_lane_f32(vsumx2_0, 0) + vgetq_lane_f32(vsumx2_0, 1) + vgetq_lane_f32(vsumx2_0, 2) + vgetq_lane_f32(vsumx2_0, 3);
++        sumy2 = vgetq_lane_f32(vsumy2_0, 0) + vgetq_lane_f32(vsumy2_0, 1) + vgetq_lane_f32(vsumy2_0, 2) + vgetq_lane_f32(vsumy2_0, 3);
 +    }
 +
-+    for (int i = 0; i < size; i++) {
-+        lastFrame[3 * i] = metedataBuf->last_floatComp[i];
-+        lastFrame[3 * i + 1] = metedataBuf->last_floatComp[1 * metedataBuf->width * metedataBuf->height + i];
-+        lastFrame[3 * i + 2] = metedataBuf->last_floatComp[2 * metedataBuf->width * metedataBuf->height + i];
-+        currentFrame[3 * i] = RGB[0][i];
-+        currentFrame[3 * i + 1] = RGB[1][i];
-+        currentFrame[3 * i + 2] = RGB[2][i];
++    for (; i < size; i++) {
++        float x0 = x0_base[i];
++        float x1 = x1_base[i];
++        float x2 = x2_base[i];
++        float y0 = y0_base[i];
++        float y1 = y1_base[i];
++        float y2 = y2_base[i];
++
++        sumx += x0 + x1 + x2;
++        sumy += y0 + y1 + y2;
++        sumxy += x0 * y0 + x1 * y1 + x2 * y2;
++        sumx2 += x0 * x0 + x1 * x1 + x2 * x2;
++        sumy2 += y0 * y0 + y1 * y1 + y2 * y2;
 +    }
 +
-+    for (int j = 0; j < 3 * size; j++) {
-+        sumx += lastFrame[j];
-+        sumy += currentFrame[j];
-+        sumxy += lastFrame[j] * currentFrame[j];
-+        sumx2 += lastFrame[j] * lastFrame[j];
-+        sumy2 += currentFrame[j] * currentFrame[j];
-+    }
++    float n_total = 3.0f * size;
++    float molecular = sumxy - ((sumx * sumy) / n_total);
++    
++    float denominator = sqrtf((sumx2 - (sumx * sumx) / n_total + 1e-10f) * (sumy2 - (sumy * sumy) / n_total + 1e-10f));
 +
-+    float molecular = sumxy - (((float) sumx * (float) sumy) / (3 * size));
-+    float denominator = (float) (sqrt((sumx2 - (float) (sumx * sumx) / (3 * size) + 0.0000000001f) *
-+                                      (sumy2 - (float) (sumy * sumy) / (3 * size) + 0.0000000001f))); // 避免除零
-+
-+    float result = 1.0;
-+    if (!feq(denominator, 0)) {
++    float result = 1.0f;
++    if (!feq(denominator, 0.0f)) {
 +        result = molecular / denominator;
 +    }
-+
-+    free(lastFrame);
-+    free(currentFrame);
-+
 +    return result;
 +}
 +
 +static void getMetedata(GenerateMetadataBuffer *metedataBuf, float *RGB[3], int width, int height, int isFirstFrame,
 +                        HDRVividMetadata *metadata, int *window_size, int *sample_size, int *filter_type,
 +                        int *ScreenChange, double targetedDisplay) {
-+    long double sumMaxRGBoneFrmae = 0;
 +    unsigned int max_content_light_leveloneFrmae = 0;
 +    unsigned int maximum_maxrgboneFrame = 0;
 +    unsigned int minimum_maxrgboneFrame = 65535;
@@ -2840,7 +2918,7 @@ index 0000000..64871e3
 +    unsigned int maxRGBdistribution99 = 0;
 +    unsigned int maxRGBdistribution100 = 0;
 +    float sumMaxRGB = 0;
-+    float MaxPixelSum = 0;
++    double MaxPixelSum = 0;
 +    unsigned int maxRGBdistribution68 = 0;
 +    unsigned int maxRGBdistribution997 = 0;
 +    unsigned int maxRGBdistribution999 = 0;
@@ -2946,8 +3024,16 @@ index 0000000..64871e3
 +        metedataBuf->graycomp2[comp2Int]++;
 +    }
 +    for (unsigned int i = 0; i < compSize; i++) {
-+        unsigned int comp0Int = (unsigned int) ((double) THRESOLD * metedataBuf->maxRGB[i]);
-+        metedataBuf->grayMaxRGB[comp0Int]++;
++        metedataBuf->maxRGB[i] *= THRESOLD;
++        unsigned int maxcompnonlinearInt;
++        unsigned int maxtempRGB = (unsigned int) metedataBuf->maxRGB[i];
++        maxcompnonlinearInt = maxtempRGB * 64;
++        if (maxcompnonlinearInt > maximum_maxrgboneFrame)
++            maximum_maxrgboneFrame = maxcompnonlinearInt;
++        if (maxcompnonlinearInt < minimum_maxrgboneFrame)
++            minimum_maxrgboneFrame = maxcompnonlinearInt;
++        metedataBuf->grayMaxRGB[maxtempRGB]++;
++        MaxPixelSum += maxtempRGB;
 +    }
 +    for (int i = 0; i < THRESOLD + 1; i++) {
 +        sumMaxRGB += metedataBuf->grayMaxRGB[i];
@@ -3060,32 +3146,15 @@ index 0000000..64871e3
 +
 +    // screen change detection
 +    {
-+        for (unsigned int i = 0; i < compSize; i++) {
-+            double comp00 = RGB[0][i];
-+            double comp11 = RGB[1][i];
-+            double comp22 = RGB[2][i];
-+            unsigned int comp0Int = (unsigned int) (THRESOLD * comp00);
-+            unsigned int comp1Int = (unsigned int) (THRESOLD * comp11);
-+            unsigned int comp2Int = (unsigned int) (THRESOLD * comp22);
-+            unsigned int maxcompnonlinearInt;
-+            unsigned int maxInt;
-+            unsigned int maxIntoneFrmae;
-+            unsigned int maxtempRGB = comp0Int > comp1Int ? comp0Int : comp1Int;
-+            maxtempRGB = maxtempRGB > comp2Int ? maxtempRGB : comp2Int;
-+            maxcompnonlinearInt = (int) (maxtempRGB * 64.0);
-+            if (maxcompnonlinearInt > maximum_maxrgboneFrame)
-+                maximum_maxrgboneFrame = maxcompnonlinearInt;
-+            if (maxcompnonlinearInt < minimum_maxrgboneFrame)
-+                minimum_maxrgboneFrame = maxcompnonlinearInt;
-+            maxInt = (unsigned int) maxtempRGB;
-+            if (maxInt > metedataBuf->max_content_light_level)
-+                metedataBuf->max_content_light_level = maxInt;
-+            MaxPixelSum += maxInt;
-+            maxIntoneFrmae = (unsigned int) maxtempRGB;
-+            if (maxIntoneFrmae > max_content_light_leveloneFrmae)
-+                max_content_light_leveloneFrmae = maxIntoneFrmae;
-+            sumMaxRGBoneFrmae += maxIntoneFrmae;
-+            if (metedataBuf->frame_num_last > 0) {
++        if (metedataBuf->frame_num_last > 0) {
++            for (unsigned int i = 0; i < compSize; i++) {
++                unsigned int maxtempRGB = metedataBuf->maxRGB[i];
++                double comp00 = RGB[0][i];
++                double comp11 = RGB[1][i];
++                double comp22 = RGB[2][i];
++                unsigned int comp0Int = (unsigned int) (THRESOLD * comp00);
++                unsigned int comp1Int = (unsigned int) (THRESOLD * comp11);
++                unsigned int comp2Int = (unsigned int) (THRESOLD * comp22); 
 +                double comp00B = metedataBuf->last_floatComp[i];
 +                double comp11B = metedataBuf->last_floatComp[1 * metedataBuf->width * metedataBuf->height + i];
 +                double comp22B = metedataBuf->last_floatComp[2 * metedataBuf->width * metedataBuf->height + i];
@@ -3171,7 +3240,7 @@ index 0000000..64871e3
 +                                 (unsigned int) ((long double) metedataBuf->FrameNum * (long double) compSize));
 +    if (meanMaxRGB > metedataBuf->max_picture_average_light_level)
 +        metedataBuf->max_picture_average_light_level = meanMaxRGB;
-+    mean_maxrgboneFrame = (unsigned int) (sumMaxRGBoneFrmae / ((long double) 1 * (long double) compSize));
++    mean_maxrgboneFrame = MaxPixelSum / compSize;
 +    if (mean_maxrgboneFrame > average_maxrgboneFrame)
 +        average_maxrgboneFrame = mean_maxrgboneFrame;
 +    avg_minimum_maxrgb = minimum_maxrgboneFrame;
@@ -3926,10 +3995,10 @@ index 0000000..a0690f7
 +
 diff --git a/libavcodec/libhw265.c b/libavcodec/libhw265.c
 new file mode 100644
-index 0000000..10c7e4f
+index 0000000..e265e1c
 --- /dev/null
 +++ b/libavcodec/libhw265.c
-@@ -0,0 +1,655 @@
+@@ -0,0 +1,654 @@
 +/*
 + * HW265 encoder library plugin for FFmpeg
 + *
@@ -4385,7 +4454,6 @@ index 0000000..10c7e4f
 +    ctx->HDRVividGenerateMetadata->width = avctx->width;
 +    ctx->HDRVividGenerateMetadata->height = avctx->height;
 +    InitBuffer(ctx->HDRVividGenerateMetadata);
-+    GetYUVBuffer(&ctx->InputData, ctx->HDRVividGenerateMetadata->width, ctx->HDRVividGenerateMetadata->height, Fixed, YUV420);
 +    GetYUVBuffer(&ctx->InputData, ctx->HDRVividGenerateMetadata->width, ctx->HDRVividGenerateMetadata->height, Fixed, YUV420);
 +    return 0;
 +}
