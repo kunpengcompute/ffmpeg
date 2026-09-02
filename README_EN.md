@@ -23,7 +23,7 @@ Kunpeng FFmpeg optimizes FFmpeg based on Kunpeng servers. It stores patches for 
 ├──patch_for_ffmpeg_4.2.2_to_support_HW265ENC/   # Directory of the HW265 encoder FFmpeg-4.2.2 plugin
 ├──patch_for_ffmpeg_7.0.1_to_support_HW265ENC/   # Directory of the HW265 encoder FFmpeg-7.0.1 plugin
 ├──ffmpeg_4.4.2-optimize-scale.patch             # FFmpeg-4.4.2 scaling algorithm optimization patch
-├──huawei_ffmpeg-7.1.1_sws_scale_optimize.patch  # FFmpeg-7.1.1 scaling algorithm optimization patch
+├──ffmpeg-7.1.1_sws_scale_optimize.patch  # FFmpeg-7.1.1 scaling algorithm optimization patch
 ├──LICENSE                                       # Open-source license
 ├──.gitattributes                                # Git attribute configuration file
 ├──COPYING.LGPLv2.1                              # LGPL v2.1 license text
@@ -61,14 +61,14 @@ The `sws_scale` function is one of the core functions of the libswscale library 
 3. Copy the FFmpeg patch to the root directory of the FFmpeg-7.1.1 code.
 
     ```bash
-    cp huawei_ffmpeg-7.1.1_sws_scale_optimize.patch ffmpeg-7.1.1/
+    cp ffmpeg-7.1.1_sws_scale_optimize.patch ffmpeg-7.1.1/
     ```
 
 4. Apply the FFmpeg patch.
 
     ```bash
     cd ffmpeg-7.1.1
-    patch -p1 < huawei_ffmpeg-7.1.1_sws_scale_optimize.patch
+    patch -p1 < ffmpeg-7.1.1_sws_scale_optimize.patch
     ```
 
 5. Compile FFmpeg. You need to add the corresponding OpenMP options. (The following commands are for reference only. Integrate the corresponding encoding library as required.)
