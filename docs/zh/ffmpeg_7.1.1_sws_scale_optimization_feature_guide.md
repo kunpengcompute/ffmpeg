@@ -41,14 +41,14 @@ sws\_scale函数是FFmpeg框架中libswscale库的核心函数之一，主要用
 3. 将FFmpeg补丁拷贝到FFmpeg-7.1.1代码根目录。
 
     ```bash
-    cp huawei_ffmpeg-7.1.1_sws_scale_optimize.patch ffmpeg-7.1.1/
+    cp ffmpeg-7.1.1_sws_scale_optimize.patch ffmpeg-7.1.1/
     ```
 
 4. 应用FFmpeg补丁。
 
     ```bash
     cd ffmpeg-7.1.1
-    patch -p1 < huawei_ffmpeg-7.1.1_sws_scale_optimize.patch
+    patch -p1 < ffmpeg-7.1.1_sws_scale_optimize.patch
     ```
 
 5. 编译FFmpeg，需要加上openmp相应选项（如下编译命令仅供参考，请按实际需求集成相应的编码库）。

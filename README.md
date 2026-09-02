@@ -1,7 +1,9 @@
 # FFmpeg 介绍
 
 ## 最新消息
+
 * [2026.03.30]：基于鲲鹏服务器对FFmpeg-4.4.2中libswscale库的bilinear、bicubic和lanczos三种缩放算法进行性能优化。
+
 * [2025.09.30]：基于鲲鹏服务器对FFmpeg-7.1.1中libswscale库的sws\_scale函数进行性能优化。
 
 ## 简介
@@ -21,7 +23,7 @@
 |   |   ├── ffmpeg_7.1.1_sws_scale_optimization_feature_guide.md    # 特性指南（FFmpeg-7.1.1）
 │   │   ├── LICENSE                                                 # 文档许可证
 ├──ffmpeg_4.4.2-optimize-scale.patch                                # FFmpeg-4.4.2 缩放算法优化补丁
-├──huawei_ffmpeg-7.1.1_sws_scale_optimize.patch                     # FFmpeg-7.1.1 sws_scale函数优化补丁
+├──ffmpeg-7.1.1_sws_scale_optimize.patch                            # FFmpeg-7.1.1 sws_scale函数优化补丁
 ├──LICENSE                                                          # 开源许可证
 ├──.gitattributes                                                   # Git属性配置文件
 ├──COPYING.LGPLv2.1                                                 # LGPL v2.1许可证文本
@@ -38,7 +40,7 @@
 
 ## License
 
-本项目采用GNU LESSER GENERAL PUBLIC LICENSE 2.1许可证。详见[LICENSE](https://gitcode.com/boostkit/ffmpeg/blob/master/LICENSE.md)文件。
+本项目采用GNU LESSER GENERAL PUBLIC LICENSE 2.1许可证。详见[LICENSE](https://gitcode.com/boostkit/ffmpeg/blob/master/LICENSE)文件。
 
 本项目的文档适用CC-BY 4.0许可证，具体请参见[LICENSE](./docs/zh/LICENSE)文件。
 
