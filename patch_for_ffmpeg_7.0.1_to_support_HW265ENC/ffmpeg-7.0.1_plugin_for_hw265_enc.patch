@@ -4091,10 +4091,10 @@ index 0000000..3b7d607
 +
 diff --git a/libavcodec/libhw265.c b/libavcodec/libhw265.c
 new file mode 100644
-index 0000000..e265e1c
+index 0000000..c889123
 --- /dev/null
 +++ b/libavcodec/libhw265.c
-@@ -0,0 +1,654 @@
+@@ -0,0 +1,787 @@
 +/*
 + * HW265 encoder library plugin for FFmpeg
 + *
@@ -4117,7 +4117,11 @@ index 0000000..e265e1c
 + * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 + */
 +
++#include "config.h"
++#include <stdarg.h>
 +#include "hwe_api.h"
++#include <dlfcn.h>
++#include <stdlib.h>
 +#include <string.h>
 +#include <float.h>
 +#include <pthread.h>
@@ -4136,12 +4140,100 @@ index 0000000..e265e1c
 +#define MAX_PKT_BUF_SIZE (1 << PKT_BUF_DEEP)
 +#define PKT_QUE_MASK (MAX_PKT_BUF_SIZE - 1)
 +
++typedef struct Hw265Api {
++    void *library;
++    int bitDepth;
++    char path[64];
++    char error[512];
++    bool (*CheckBitDepth)(uint32_t bitDepth);
++    HWE_ReturnVal (*ParamDefault)(HWE_CreateParams *params);
++    HWE_ReturnVal (*Create)(HWE_Handle *handle, const HWE_CreateParams *params);
++    HWE_ReturnVal (*GetHeader)(HWE_Handle handle, HWE_Output *output);
++    HWE_ReturnVal (*Process)(HWE_Handle handle, HWE_Input *input);
++    HWE_ReturnVal (*Flush)(HWE_Handle handle);
++    HWE_ReturnVal (*Delete)(HWE_Handle handle);
++} Hw265Api;
++
++static Hw265Api hw265_api_eight;
++static Hw265Api hw265_api_ten;
++static pthread_once_t hw265_api_once = PTHREAD_ONCE_INIT;
++
++static int LoadHw265Api(Hw265Api *api, const char *path, int bitDepth)
++{
++    memset(api, 0, sizeof(*api));
++    void *library = dlopen(path, RTLD_NOW | RTLD_LOCAL);
++    if (!library) {
++        const char *error = dlerror();
++        snprintf(api->error, sizeof(api->error), "%s: %s", path, error ? error : "dlopen failed");
++        return AVERROR_EXTERNAL;
++    }
++
++#define LOAD_HW265_SYMBOL(member, type) do {                                             \
++    dlerror();                                                                         \
++    api->member = (type)dlsym(library, "HWE_" #member);                                   \
++    if (!api->member) {                                                                 \
++        snprintf(api->error, sizeof(api->error), "%s: missing HWE_%s", path, #member);    \
++        goto fail;                                                                     \
++    }                                                                                  \
++} while (0)
++
++    LOAD_HW265_SYMBOL(CheckBitDepth, bool (*)(uint32_t));
++    LOAD_HW265_SYMBOL(ParamDefault, HWE_ReturnVal (*)(HWE_CreateParams *));
++    LOAD_HW265_SYMBOL(Create, HWE_ReturnVal (*)(HWE_Handle *, const HWE_CreateParams *));
++    LOAD_HW265_SYMBOL(GetHeader, HWE_ReturnVal (*)(HWE_Handle, HWE_Output *));
++    LOAD_HW265_SYMBOL(Process, HWE_ReturnVal (*)(HWE_Handle, HWE_Input *));
++    LOAD_HW265_SYMBOL(Flush, HWE_ReturnVal (*)(HWE_Handle));
++    LOAD_HW265_SYMBOL(Delete, HWE_ReturnVal (*)(HWE_Handle));
++#undef LOAD_HW265_SYMBOL
++
++    const int eight = api->CheckBitDepth(8);
++    const int ten = api->CheckBitDepth(10);
++    if (eight == ten || (bitDepth && !api->CheckBitDepth(bitDepth))) {
++        snprintf(api->error, sizeof(api->error), "%s: incompatible backend bit depth (requested %d)",
++                 path, bitDepth);
++        goto fail;
++    }
++
++    snprintf(api->path, sizeof(api->path), "%s", path);
++    api->bitDepth = ten ? 10 : 8;
++    api->library = library;
++    return 0;
++
++fail:
++    dlclose(library);
++    return AVERROR_EXTERNAL;
++}
++
++static void InitHw265Apis(void)
++{
++    Hw265Api primary;
++
++    /* Load the primary first: both unmodified SDK libraries have the same SONAME. */
++    if (LoadHw265Api(&primary, "libhw265.so", 0) >= 0) {
++        if (primary.bitDepth == 8) {
++            hw265_api_eight = primary;
++        } else {
++            hw265_api_ten = primary;
++            snprintf(hw265_api_eight.error, sizeof(hw265_api_eight.error),
++                     "libhw265.so provides only 10-bit encoding");
++        }
++    } else {
++        hw265_api_eight = primary;
++    }
++
++    if (!hw265_api_ten.library) {
++        LoadHw265Api(&hw265_api_ten, "libhw265_10bit.so", 10);
++    }
++    /* Retain successful loads for the process lifetime, including asynchronous callbacks. */
++}
++
 +typedef struct Libhw265Context {
 +    const AVClass *class;
 +
 +    HWE_CreateParams creatParams;
 +    HWE_Input input;
 +    HWE_Handle encHandle;
++    const Hw265Api *api;
 +    AVCodecContext *pOutHandle;
 +
 +    int channelID;
@@ -4305,24 +4397,27 @@ index 0000000..e265e1c
 +static av_cold int Libhw265EncodeClose(AVCodecContext *avctx)
 +{
 +    Libhw265Context *ctx = avctx->priv_data;
-+    int ret = HWE_Flush(ctx->encHandle);
-+    if (ret != HWE_RET_OK) {
-+        av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_Flush failed.\n");
-+    }
-+
-+    ret = HWE_Delete(ctx->encHandle);
-+    if (ret != HWE_RET_OK) {
-+        av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_Delete failed.\n");
++    if (ctx->encHandle && ctx->api) {
++        int ret = ctx->api->Flush(ctx->encHandle);
++        if (ret != HWE_RET_OK) {
++            av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_Flush failed.\n");
++        }
++        ret = ctx->api->Delete(ctx->encHandle);
++        if (ret != HWE_RET_OK) {
++            av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_Delete failed.\n");
++        }
++        ctx->encHandle = NULL;
 +    }
 +    ReleaseYUVBuffer(&ctx->InputData);
-+    ReleaseBuffer(ctx->HDRVividGenerateMetadata);
++    if (ctx->HDRVividGenerateMetadata) {
++        ReleaseBuffer(ctx->HDRVividGenerateMetadata);
++    }
 +    return 0;
 +}
 +
 +static int SetDefaultValue(AVCodecContext *avctx)
 +{
 +    Libhw265Context *ctx = avctx->priv_data;
-+    int ret;
 +    ctx->pOutHandle = avctx;
 +    ctx->totalFrame = 0;
 +    ctx->pktQueueMask = PKT_QUE_MASK;
@@ -4334,7 +4429,7 @@ index 0000000..e265e1c
 +    ctx->encHandle = NULL;
 +
 +    // Default value
-+    ret = HWE_ParamDefault(&ctx->creatParams);
++    int ret = ctx->api->ParamDefault(&ctx->creatParams);
 +    if (ret != HWE_RET_OK) {
 +        av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_ParamDefault failed.\n");
 +        Libhw265EncodeClose(avctx);
@@ -4443,10 +4538,11 @@ index 0000000..e265e1c
 +    ctx->creatParams.h265eCodecParam.wppThreadNum =
 +        (ctx->wppThreadNum >= 0) ? ctx->wppThreadNum : ctx->creatParams.h265eCodecParam.wppThreadNum;
 +    
-+    if (av_pix_fmt_desc_get(avctx->pix_fmt)->comp[0].depth == 10) {
++    if (ctx->api->bitDepth == 10) {
 +        ctx->creatParams.h265eCodecParam.bitDepth = HWE_10BIT_DEPTH;
 +        ctx->creatParams.h265eCodecParam.profile = HWE_H265E_PROFILE_MAIN10;
 +    } else {
++        ctx->creatParams.h265eCodecParam.bitDepth = HWE_8BIT_DEPTH;
 +        ctx->creatParams.h265eCodecParam.profile =
 +        (ctx->profile >= 0) ? ctx->profile : ctx->creatParams.h265eCodecParam.profile;
 +    }
@@ -4510,8 +4606,21 @@ index 0000000..e265e1c
 +static av_cold int Libhw265EncodeInit(AVCodecContext *avctx)
 +{
 +    Libhw265Context *ctx = avctx->priv_data;
-+    HWE_Output outputData;
-+    int ret;
++    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(avctx->pix_fmt);
++    if (!desc || (desc->comp[0].depth != 8 && desc->comp[0].depth != 10)) {
++        return AVERROR(EINVAL);
++    }
++    int ret = pthread_once(&hw265_api_once, InitHw265Apis);
++    if (ret) {
++        return AVERROR(ret);
++    }
++    ctx->api = desc->comp[0].depth == 10 ? &hw265_api_ten : &hw265_api_eight;
++    if (!ctx->api->library) {
++        av_log(avctx, AV_LOG_ERROR, "No usable %d-bit HW265 backend: %s\n",
++               desc->comp[0].depth, ctx->api->error);
++        return AVERROR_EXTERNAL;
++    }
++    av_log(avctx, AV_LOG_VERBOSE, "Using %d-bit HW265 backend: %s\n", ctx->api->bitDepth, ctx->api->path);
 +
 +    if (SetDefaultValue(avctx) == HWE_RET_FAILED) {
 +        return AVERROR_INVALIDDATA;
@@ -4525,12 +4634,13 @@ index 0000000..e265e1c
 +    ctx->creatParams.callbackFuns.freeCallback = NULL;
 +    ctx->creatParams.callbackFuns.encodeDoneCallback = Libhw265EncodeDone;
 +
-+    ret = HWE_Create(&ctx->encHandle, &ctx->creatParams);
++    ret = ctx->api->Create(&ctx->encHandle, &ctx->creatParams);
 +    if (ret != HWE_RET_OK) {
 +        av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_Create failed.\n");
 +        return AVERROR(ENOMEM);
 +    }
-+    ret = HWE_GetHeader(ctx->encHandle, &outputData);
++    HWE_Output outputData = { 0 };
++    ret = ctx->api->GetHeader(ctx->encHandle, &outputData);
 +    if (ret != HWE_RET_OK) {
 +        av_log(avctx, AV_LOG_ERROR, "Cannot encode headers.\n");
 +        Libhw265EncodeClose(avctx);
@@ -4592,14 +4702,18 @@ index 0000000..e265e1c
 +        ctx->input.inFrameInfo.framePktSize = pic->pkt_size;
 +        ctx->input.inFrameInfo.frameType = HWE_FRAME_TYPE_INVALID;
 +
-+        ret = HWE_Process(ctx->encHandle, &ctx->input);
++        ret = ctx->api->Process(ctx->encHandle, &ctx->input);
 +        if (ret != HWE_RET_OK) {
 +            av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_Process failed.\n");
 +            Libhw265EncodeClose(avctx);
-+            return ret;
++            return AVERROR_EXTERNAL;
 +        }
 +    } else {
-+        ret = HWE_Flush(ctx->encHandle);
++        ret = ctx->api->Flush(ctx->encHandle);
++        if (ret != HWE_RET_OK) {
++            av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_Flush failed.\n");
++            return AVERROR_EXTERNAL;
++        }
 +        ctx->isSendEND = 1;
 +    }
 +    ret = Libhw265ReceivePacket(avctx, pkt);
@@ -4624,6 +4738,15 @@ index 0000000..e265e1c
 +};
 +
 +static const enum AVPixelFormat hw265_csp_ten[] = {
++    AV_PIX_FMT_YUV420P10,
++    AV_PIX_FMT_YUV422P10,
++    AV_PIX_FMT_YUV444P10,
++    AV_PIX_FMT_GBRP10,
++    AV_PIX_FMT_GRAY10,
++    AV_PIX_FMT_NONE
++};
++
++static const enum AVPixelFormat hw265_csp_all[] = {
 +    AV_PIX_FMT_YUV420P,
 +    AV_PIX_FMT_YUVJ420P,
 +    AV_PIX_FMT_YUV422P,
@@ -4640,12 +4763,22 @@ index 0000000..e265e1c
 +    AV_PIX_FMT_NONE
 +};
 +
++static const enum AVPixelFormat hw265_csp_none[] = {
++    AV_PIX_FMT_NONE
++};
++
 +static av_cold void libhw265_encode_init_csp(FFCodec *codec)
 +{
-+    if (HWE_CheckBitDepth(8)) {
-+        codec->p.pix_fmts = hw265_csp_eight;
-+    } else if (HWE_CheckBitDepth(10)) {
++    codec->p.pix_fmts = hw265_csp_none;
++    if (pthread_once(&hw265_api_once, InitHw265Apis)) {
++        return;
++    }
++    if (hw265_api_eight.library && hw265_api_ten.library) {
++        codec->p.pix_fmts = hw265_csp_all;
++    } else if (hw265_api_ten.library) {
 +        codec->p.pix_fmts = hw265_csp_ten;
++    } else if (hw265_api_eight.library) {
++        codec->p.pix_fmts = hw265_csp_eight;
 +    }
 +}
 +
