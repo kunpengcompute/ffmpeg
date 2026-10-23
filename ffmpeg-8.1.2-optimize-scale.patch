@@ -1,0 +1,1701 @@
+diff --git a/libswscale/aarch64/Makefile b/libswscale/aarch64/Makefile
+index 1c82e34..addbe04 100644
+--- a/libswscale/aarch64/Makefile
++++ b/libswscale/aarch64/Makefile
+@@ -7,0 +8 @@ NEON-OBJS   += aarch64/hscale.o                 \
++               aarch64/yuv2rgb24_neon.o         \
+diff --git a/libswscale/aarch64/hscale.S b/libswscale/aarch64/hscale.S
+index 6c14246..b868717 100644
+--- a/libswscale/aarch64/hscale.S
++++ b/libswscale/aarch64/hscale.S
+@@ -350,0 +351,529 @@ endfunc
++/*
++ * Fixed 3:2 horizontal scaler for the two-phase, three-tap interior pattern.
++ *
++ * The C dispatcher selects this kernel only after verifying that:
++ *   - srcW:dstW is exactly 3:2 and xInc is 98304;
++ *   - filterSize is 4;
++ *   - outputs 1 .. dstW-2 alternate between two fixed coefficient rows;
++ *   - the fourth coefficient of both interior phases is zero;
++ *   - filterPos follows base, base+1, base+3, base+4, ...
++ *
++ * Output 0 and the final seven outputs are evaluated from filter/filterPos with
++ * the generic scalar four-tap calculation.  Full interior groups use one
++ * contiguous 16-byte source load for eight outputs and three TBL operations.
++ */
++function ff_hscale8to15_3_2_neon, export=1
++// x0  SwsInternal *c (not used; reused as the unmodified source base)
++// x1  int16_t *dst
++// w2  int dstW
++// x3  const uint8_t *src
++// x4  const int16_t *filter
++// x5  const int32_t *filterPos
++// w6  int filterSize (verified as 4 by the dispatcher)
++//
++// The vector loop is unrolled by two.  Each main iteration computes two
++// consecutive 8-output groups (16 outputs total) using two overlapping
++// contiguous 16-byte loads.  An optional final 8-output group uses the same
++// fixed 3:2 TBL path.  Scalar processing remains for the exact boundaries.
++
++        mov             x0, x3                      // preserve source base for scalar boundaries
++
++        // Output 0: retain the exact generic four-tap boundary calculation.
++        ldr             w8, [x5], #4
++        add             x9, x0, w8, uxtw
++        ldr             s16, [x9]
++        ldr             d17, [x4], #8
++        uxtl            v16.8h, v16.8b
++        smull           v18.4s, v16.4h, v17.4h
++        addv            s18, v18.4s
++        sqshrn          h18, s18, #7
++        st1             {v18.h}[0], [x1], #2
++        sub             w2, w2, #1
++
++        // Build three alternating coefficient vectors from phase A/B rows.
++        // x4 now points at filter row 1 (phase A), x4+8 at row 2 (phase B).
++        ldr             d20, [x4]
++        ldr             d21, [x4, #8]
++
++        dup             v22.8h, v20.h[0]
++        dup             v28.8h, v21.h[0]
++        trn1            v22.8h, v22.8h, v28.8h      // tap 0: A0,B0,A0,B0,...
++
++        dup             v23.8h, v20.h[1]
++        dup             v28.8h, v21.h[1]
++        trn1            v23.8h, v23.8h, v28.8h      // tap 1: A1,B1,A1,B1,...
++
++        dup             v24.8h, v20.h[2]
++        dup             v28.8h, v21.h[2]
++        trn1            v24.8h, v24.8h, v28.8h      // tap 2: A2,B2,A2,B2,...
++
++        // Base TBL indices are {0,1,3,4,6,7,9,10}; the other taps are +1/+2.
++        ldr             d25, .Lhscale_3_2_tbl0
++        movi            v26.8b, #1
++        add             v26.8b, v25.8b, v26.8b
++        movi            v27.8b, #2
++        add             v27.8b, v25.8b, v27.8b
++
++        // Leave at least seven outputs for exact scalar processing: six
++        // interior outputs plus the right boundary.  Count complete 8-output
++        // groups, then execute pairs of groups in the 16-output main loop.
++        cmp             w2, #15
++        b.lt            .Lhscale_3_2_tail
++        sub             w6, w2, #7
++        lsr             w6, w6, #3                  // total number of 8-output groups
++        cbz             w6, .Lhscale_3_2_tail
++
++        ldr             w9, [x5]                    // filterPos[1], start of phase A
++        add             x3, x0, w9, uxtw
++
++        // Advance filter tables directly to the scalar tail.  The fixed
++        // vector kernel no longer reads per-output filter/filterPos entries.
++        add             x4, x4, x6, lsl #6          // 8 rows * 4 coeffs * 2 bytes
++        add             x5, x5, x6, lsl #5          // 8 positions * 4 bytes
++        sub             w2, w2, w6, lsl #3
++
++        and             w8, w6, #1                  // optional final 8-output group
++        lsr             w7, w6, #1                  // number of 16-output groups
++        cbz             w7, 2f
++
++        .p2align        4
++1:
++        // Two adjacent 8-output groups consume 24 new source bytes.  The two
++        // 16-byte loads overlap by four bytes, avoiding LD3 deinterleaving and
++        // retaining the TBL data layout that performed better on this CPU.
++        ldr             q0, [x3]
++        ldr             q6, [x3, #12]
++        add             x3, x3, #24
++
++        // First 8 outputs.
++        tbl             v1.8b, {v0.16b}, v25.8b
++        tbl             v2.8b, {v0.16b}, v26.8b
++        tbl             v3.8b, {v0.16b}, v27.8b
++
++        uxtl            v1.8h, v1.8b
++        uxtl            v2.8h, v2.8b
++        uxtl            v3.8h, v3.8b
++
++        smull           v4.4s, v1.4h, v22.4h
++        smull2          v5.4s, v1.8h, v22.8h
++        smlal           v4.4s, v2.4h, v23.4h
++        smlal2          v5.4s, v2.8h, v23.8h
++        smlal           v4.4s, v3.4h, v24.4h
++        smlal2          v5.4s, v3.8h, v24.8h
++
++        // Second 8 outputs.  Eight outputs preserve the A/B phase, so the
++        // same TBL indices and coefficient vectors are reused unchanged.
++        tbl             v16.8b, {v6.16b}, v25.8b
++        tbl             v17.8b, {v6.16b}, v26.8b
++        tbl             v18.8b, {v6.16b}, v27.8b
++
++        uxtl            v16.8h, v16.8b
++        uxtl            v17.8h, v17.8b
++        uxtl            v18.8h, v18.8b
++
++        smull           v19.4s, v16.4h, v22.4h
++        smull2          v20.4s, v16.8h, v22.8h
++        smlal           v19.4s, v17.4h, v23.4h
++        smlal2          v20.4s, v17.8h, v23.8h
++        smlal           v19.4s, v18.4h, v24.4h
++        smlal2          v20.4s, v18.8h, v24.8h
++
++        sqshrn          v4.4h, v4.4s, #7
++        sqshrn2         v4.8h, v5.4s, #7
++        sqshrn          v6.4h, v19.4s, #7
++        sqshrn2         v6.8h, v20.4s, #7
++        stp             q4, q6, [x1], #32
++
++        subs            w7, w7, #1
++        b.ne            1b
++
++        // When the number of vector groups is odd, retain one final original
++        // 8-output TBL block rather than moving those outputs to scalar code.
++2:
++        cbz             w8, .Lhscale_3_2_tail
++
++        ldr             q0, [x3]
++        tbl             v1.8b, {v0.16b}, v25.8b
++        tbl             v2.8b, {v0.16b}, v26.8b
++        tbl             v3.8b, {v0.16b}, v27.8b
++
++        uxtl            v1.8h, v1.8b
++        uxtl            v2.8h, v2.8b
++        uxtl            v3.8h, v3.8b
++
++        smull           v4.4s, v1.4h, v22.4h
++        smull2          v5.4s, v1.8h, v22.8h
++        smlal           v4.4s, v2.4h, v23.4h
++        smlal2          v5.4s, v2.8h, v23.8h
++        smlal           v4.4s, v3.4h, v24.4h
++        smlal2          v5.4s, v3.8h, v24.8h
++
++        sqshrn          v4.4h, v4.4s, #7
++        sqshrn2         v4.8h, v5.4s, #7
++        st1             {v4.8h}, [x1], #16
++
++        // Exact generic calculation for the remaining interior samples and
++        // the right boundary.  This also avoids any source over-read at row end.
++.Lhscale_3_2_tail:
++        cbz             w2, .Lhscale_3_2_done
++.Lhscale_3_2_tail_loop:
++        ldr             w8, [x5], #4
++        add             x9, x0, w8, uxtw
++        ldr             s16, [x9]
++        ldr             d17, [x4], #8
++        uxtl            v16.8h, v16.8b
++        smull           v18.4s, v16.4h, v17.4h
++        addv            s18, v18.4s
++        sqshrn          h18, s18, #7
++        st1             {v18.h}[0], [x1], #2
++        subs            w2, w2, #1
++        b.ne            .Lhscale_3_2_tail_loop
++.Lhscale_3_2_done:
++        ret
++endfunc
++
++
++
++/*
++ * Fixed 5:2 horizontal scaler for the two-phase, five-tap interior pattern.
++ * The dispatcher validates the complete filter/filterPos tables before using
++ * this kernel. Output 0 and the final seven outputs retain exact generic
++ * eight-tap evaluation; full interior groups use two-table TBL gathers.
++ */
++function ff_hscale8to15_5_2_neon, export=1
++        mov             x0, x3
++
++        // Output 0: exact generic 8-tap boundary calculation.
++        ldr             w8, [x5], #4
++        add             x9, x0, w8, uxtw
++        ldr             d16, [x9]
++        ldr             q17, [x4], #16
++        uxtl            v16.8h, v16.8b
++        smull           v18.4s, v16.4h, v17.4h
++        smull2          v19.4s, v16.8h, v17.8h
++        add             v18.4s, v18.4s, v19.4s
++        addv            s18, v18.4s
++        sqshrn          h18, s18, #7
++        st1             {v18.h}[0], [x1], #2
++        sub             w2, w2, #1
++
++        // Row 1/2 are the alternating phase A/B coefficient rows.
++        ldr             q20, [x4]
++        ldr             q21, [x4, #16]
++
++        dup             v22.8h, v20.h[0]
++        dup             v19.8h, v21.h[0]
++        trn1            v22.8h, v22.8h, v19.8h
++        dup             v23.8h, v20.h[1]
++        dup             v19.8h, v21.h[1]
++        trn1            v23.8h, v23.8h, v19.8h
++        dup             v24.8h, v20.h[2]
++        dup             v19.8h, v21.h[2]
++        trn1            v24.8h, v24.8h, v19.8h
++        dup             v25.8h, v20.h[3]
++        dup             v19.8h, v21.h[3]
++        trn1            v25.8h, v25.8h, v19.8h
++        dup             v26.8h, v20.h[4]
++        dup             v19.8h, v21.h[4]
++        trn1            v26.8h, v26.8h, v19.8h
++
++        // Output starts: 0,3,5,8,10,13,15,18. Taps 1..4 are +1..+4.
++        ldr             d27, .Lhscale_5_2_tbl0
++        movi            v28.8b, #1
++        add             v28.8b, v27.8b, v28.8b
++        movi            v29.8b, #2
++        add             v29.8b, v27.8b, v29.8b
++        movi            v30.8b, #3
++        add             v30.8b, v27.8b, v30.8b
++        movi            v31.8b, #4
++        add             v31.8b, v27.8b, v31.8b
++
++        cmp             w2, #15
++        b.lt            .Lhscale_5_2_tail
++        sub             w6, w2, #7
++        lsr             w6, w6, #3
++        cbz             w6, .Lhscale_5_2_tail
++
++        ldr             w9, [x5]
++        add             x3, x0, w9, uxtw
++        add             x4, x4, x6, lsl #7          // 8 rows * 8 coeffs * 2
++        add             x5, x5, x6, lsl #5          // 8 positions * 4
++        sub             w2, w2, w6, lsl #3
++
++        and             w8, w6, #1
++        lsr             w7, w6, #1
++        cbz             w7, 2f
++
++        .p2align        4
++1:
++        ldp             q0, q1, [x3]
++        add             x9, x3, #20
++        ldp             q6, q7, [x9]
++        add             x3, x3, #40
++
++        tbl             v2.8b, {v0.16b, v1.16b}, v27.8b
++        uxtl            v2.8h, v2.8b
++        smull           v4.4s, v2.4h, v22.4h
++        smull2          v5.4s, v2.8h, v22.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v28.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v23.4h
++        smlal2          v5.4s, v2.8h, v23.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v29.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v24.4h
++        smlal2          v5.4s, v2.8h, v24.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v30.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v25.4h
++        smlal2          v5.4s, v2.8h, v25.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v31.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v26.4h
++        smlal2          v5.4s, v2.8h, v26.8h
++
++        tbl             v16.8b, {v6.16b, v7.16b}, v27.8b
++        uxtl            v16.8h, v16.8b
++        smull           v17.4s, v16.4h, v22.4h
++        smull2          v18.4s, v16.8h, v22.8h
++        tbl             v16.8b, {v6.16b, v7.16b}, v28.8b
++        uxtl            v16.8h, v16.8b
++        smlal           v17.4s, v16.4h, v23.4h
++        smlal2          v18.4s, v16.8h, v23.8h
++        tbl             v16.8b, {v6.16b, v7.16b}, v29.8b
++        uxtl            v16.8h, v16.8b
++        smlal           v17.4s, v16.4h, v24.4h
++        smlal2          v18.4s, v16.8h, v24.8h
++        tbl             v16.8b, {v6.16b, v7.16b}, v30.8b
++        uxtl            v16.8h, v16.8b
++        smlal           v17.4s, v16.4h, v25.4h
++        smlal2          v18.4s, v16.8h, v25.8h
++        tbl             v16.8b, {v6.16b, v7.16b}, v31.8b
++        uxtl            v16.8h, v16.8b
++        smlal           v17.4s, v16.4h, v26.4h
++        smlal2          v18.4s, v16.8h, v26.8h
++
++        sqshrn          v4.4h, v4.4s, #7
++        sqshrn2         v4.8h, v5.4s, #7
++        sqshrn          v6.4h, v17.4s, #7
++        sqshrn2         v6.8h, v18.4s, #7
++        stp             q4, q6, [x1], #32
++        subs            w7, w7, #1
++        b.ne            1b
++
++2:
++        cbz             w8, .Lhscale_5_2_tail
++        ldp             q0, q1, [x3]
++        tbl             v2.8b, {v0.16b, v1.16b}, v27.8b
++        uxtl            v2.8h, v2.8b
++        smull           v4.4s, v2.4h, v22.4h
++        smull2          v5.4s, v2.8h, v22.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v28.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v23.4h
++        smlal2          v5.4s, v2.8h, v23.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v29.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v24.4h
++        smlal2          v5.4s, v2.8h, v24.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v30.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v25.4h
++        smlal2          v5.4s, v2.8h, v25.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v31.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v26.4h
++        smlal2          v5.4s, v2.8h, v26.8h
++        sqshrn          v4.4h, v4.4s, #7
++        sqshrn2         v4.8h, v5.4s, #7
++        st1             {v4.8h}, [x1], #16
++
++.Lhscale_5_2_tail:
++        cbz             w2, .Lhscale_5_2_done
++.Lhscale_5_2_tail_loop:
++        ldr             w8, [x5], #4
++        add             x9, x0, w8, uxtw
++        ldr             d16, [x9]
++        ldr             q17, [x4], #16
++        uxtl            v16.8h, v16.8b
++        smull           v18.4s, v16.4h, v17.4h
++        smull2          v19.4s, v16.8h, v17.8h
++        add             v18.4s, v18.4s, v19.4s
++        addv            s18, v18.4s
++        sqshrn          h18, s18, #7
++        st1             {v18.h}[0], [x1], #2
++        subs            w2, w2, #1
++        b.ne            .Lhscale_5_2_tail_loop
++.Lhscale_5_2_done:
++        ret
++endfunc
++
++/*
++ * Fixed 3:1 horizontal scaler for the one-phase, five-tap interior pattern.
++ * The same safety and exact-boundary policy as the 5:2 kernel is used.
++ */
++function ff_hscale8to15_3_1_neon, export=1
++        mov             x0, x3
++
++        ldr             w8, [x5], #4
++        add             x9, x0, w8, uxtw
++        ldr             d16, [x9]
++        ldr             q17, [x4], #16
++        uxtl            v16.8h, v16.8b
++        smull           v18.4s, v16.4h, v17.4h
++        smull2          v19.4s, v16.8h, v17.8h
++        add             v18.4s, v18.4s, v19.4s
++        addv            s18, v18.4s
++        sqshrn          h18, s18, #7
++        st1             {v18.h}[0], [x1], #2
++        sub             w2, w2, #1
++
++        ldr             q20, [x4]
++        dup             v22.8h, v20.h[0]
++        dup             v23.8h, v20.h[1]
++        dup             v24.8h, v20.h[2]
++        dup             v25.8h, v20.h[3]
++        dup             v26.8h, v20.h[4]
++
++        // Output starts: 0,3,6,9,12,15,18,21.
++        ldr             d27, .Lhscale_3_1_tbl0
++        movi            v28.8b, #1
++        add             v28.8b, v27.8b, v28.8b
++        movi            v29.8b, #2
++        add             v29.8b, v27.8b, v29.8b
++        movi            v30.8b, #3
++        add             v30.8b, v27.8b, v30.8b
++        movi            v31.8b, #4
++        add             v31.8b, v27.8b, v31.8b
++
++        cmp             w2, #15
++        b.lt            .Lhscale_3_1_tail
++        sub             w6, w2, #7
++        lsr             w6, w6, #3
++        cbz             w6, .Lhscale_3_1_tail
++
++        ldr             w9, [x5]
++        add             x3, x0, w9, uxtw
++        add             x4, x4, x6, lsl #7
++        add             x5, x5, x6, lsl #5
++        sub             w2, w2, w6, lsl #3
++
++        and             w8, w6, #1
++        lsr             w7, w6, #1
++        cbz             w7, 4f
++
++        .p2align        4
++3:
++        ldp             q0, q1, [x3]
++        add             x9, x3, #24
++        ldp             q6, q7, [x9]
++        add             x3, x3, #48
++
++        tbl             v2.8b, {v0.16b, v1.16b}, v27.8b
++        uxtl            v2.8h, v2.8b
++        smull           v4.4s, v2.4h, v22.4h
++        smull2          v5.4s, v2.8h, v22.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v28.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v23.4h
++        smlal2          v5.4s, v2.8h, v23.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v29.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v24.4h
++        smlal2          v5.4s, v2.8h, v24.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v30.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v25.4h
++        smlal2          v5.4s, v2.8h, v25.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v31.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v26.4h
++        smlal2          v5.4s, v2.8h, v26.8h
++
++        tbl             v16.8b, {v6.16b, v7.16b}, v27.8b
++        uxtl            v16.8h, v16.8b
++        smull           v17.4s, v16.4h, v22.4h
++        smull2          v18.4s, v16.8h, v22.8h
++        tbl             v16.8b, {v6.16b, v7.16b}, v28.8b
++        uxtl            v16.8h, v16.8b
++        smlal           v17.4s, v16.4h, v23.4h
++        smlal2          v18.4s, v16.8h, v23.8h
++        tbl             v16.8b, {v6.16b, v7.16b}, v29.8b
++        uxtl            v16.8h, v16.8b
++        smlal           v17.4s, v16.4h, v24.4h
++        smlal2          v18.4s, v16.8h, v24.8h
++        tbl             v16.8b, {v6.16b, v7.16b}, v30.8b
++        uxtl            v16.8h, v16.8b
++        smlal           v17.4s, v16.4h, v25.4h
++        smlal2          v18.4s, v16.8h, v25.8h
++        tbl             v16.8b, {v6.16b, v7.16b}, v31.8b
++        uxtl            v16.8h, v16.8b
++        smlal           v17.4s, v16.4h, v26.4h
++        smlal2          v18.4s, v16.8h, v26.8h
++
++        sqshrn          v4.4h, v4.4s, #7
++        sqshrn2         v4.8h, v5.4s, #7
++        sqshrn          v6.4h, v17.4s, #7
++        sqshrn2         v6.8h, v18.4s, #7
++        stp             q4, q6, [x1], #32
++        subs            w7, w7, #1
++        b.ne            3b
++
++4:
++        cbz             w8, .Lhscale_3_1_tail
++        ldp             q0, q1, [x3]
++        tbl             v2.8b, {v0.16b, v1.16b}, v27.8b
++        uxtl            v2.8h, v2.8b
++        smull           v4.4s, v2.4h, v22.4h
++        smull2          v5.4s, v2.8h, v22.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v28.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v23.4h
++        smlal2          v5.4s, v2.8h, v23.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v29.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v24.4h
++        smlal2          v5.4s, v2.8h, v24.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v30.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v25.4h
++        smlal2          v5.4s, v2.8h, v25.8h
++        tbl             v2.8b, {v0.16b, v1.16b}, v31.8b
++        uxtl            v2.8h, v2.8b
++        smlal           v4.4s, v2.4h, v26.4h
++        smlal2          v5.4s, v2.8h, v26.8h
++        sqshrn          v4.4h, v4.4s, #7
++        sqshrn2         v4.8h, v5.4s, #7
++        st1             {v4.8h}, [x1], #16
++
++.Lhscale_3_1_tail:
++        cbz             w2, .Lhscale_3_1_done
++.Lhscale_3_1_tail_loop:
++        ldr             w8, [x5], #4
++        add             x9, x0, w8, uxtw
++        ldr             d16, [x9]
++        ldr             q17, [x4], #16
++        uxtl            v16.8h, v16.8b
++        smull           v18.4s, v16.4h, v17.4h
++        smull2          v19.4s, v16.8h, v17.8h
++        add             v18.4s, v18.4s, v19.4s
++        addv            s18, v18.4s
++        sqshrn          h18, s18, #7
++        st1             {v18.h}[0], [x1], #2
++        subs            w2, w2, #1
++        b.ne            .Lhscale_3_1_tail_loop
++.Lhscale_3_1_done:
++        ret
++endfunc
++
++
++        .p2align        3
++.Lhscale_5_2_tbl0:
++        .byte           0, 3, 5, 8, 10, 13, 15, 18
++.Lhscale_3_1_tbl0:
++        .byte           0, 3, 6, 9, 12, 15, 18, 21
++
++        .p2align        3
++.Lhscale_3_2_tbl0:
++        .byte           0, 1, 3, 4, 6, 7, 9, 10
++
+diff --git a/libswscale/aarch64/swscale.c b/libswscale/aarch64/swscale.c
+index 4f86364..e8a03fa 100644
+--- a/libswscale/aarch64/swscale.c
++++ b/libswscale/aarch64/swscale.c
+@@ -24,0 +25 @@
++#include "yuv2rgb24_neon.h"
+@@ -189,0 +191,138 @@ ALL_SCALE_FUNCS(neon);
++SCALE_FUNC(3_2, 8, 15, neon);
++SCALE_FUNC(5_2, 8, 15, neon);
++SCALE_FUNC(3_1, 8, 15, neon);
++
++/*
++ * Match only the exact two-phase 3:2 layout consumed by
++ * ff_hscale8to15_3_2_neon(). The first and final outputs are deliberately
++ * excluded from the phase check because the assembly evaluates them from
++ * filter/filterPos with the generic four-tap calculation.
++ */
++static int hscale8to15_3_2_neon_compatible(int srcW, int dstW, int xInc, int filterSize,
++                                           const int16_t *filter, const int32_t *filterPos)
++{
++    if (!filter || !filterPos || filterSize != 4 || dstW < 10) {
++        return 0;
++    }
++    if ((int64_t)srcW * 2 != (int64_t)dstW * 3 || xInc != 98304) {
++        return 0;
++    }
++    if ((dstW - 2) & 1) {
++        return 0;
++    }
++
++    const int16_t *phaseA = filter + filterSize;
++    const int16_t *phaseB = phaseA + filterSize;
++    if (phaseA[3] != 0 || phaseB[3] != 0) {
++        return 0;
++    }
++
++    const int basePos = filterPos[1];
++    if (basePos < 0) {
++        return 0;
++    }
++
++    for (int i = 1; i < dstW - 1; i++) {
++        const int phase = (i - 1) & 1;
++        const int expectedPos = basePos + 3 * ((i - 1) >> 1) + phase;
++        const int16_t *expected = phase ? phaseB : phaseA;
++        const int16_t *current = filter + i * filterSize;
++
++        if (filterPos[i] != expectedPos) {
++            return 0;
++        }
++        for (int j = 0; j < filterSize; j++) {
++            if (current[j] != expected[j]) {
++                return 0;
++            }
++        }
++    }
++
++    return 1;
++}
++
++/* Match the exact two-phase 5:2, five-effective-tap layout. */
++static int hscale8to15_5_2_neon_compatible(int srcW, int dstW, int xInc, int filterSize,
++                                           const int16_t *filter, const int32_t *filterPos)
++{
++    if (!filter || !filterPos || filterSize != 8 || dstW < 12) {
++        return 0;
++    }
++    if ((int64_t)srcW * 2 != (int64_t)dstW * 5 || xInc != 163840) {
++        return 0;
++    }
++
++    const int16_t *phaseA = filter + filterSize;
++    const int16_t *phaseB = phaseA + filterSize;
++    for (int j = 5; j < filterSize; j++) {
++        if (phaseA[j] || phaseB[j]) {
++            return 0;
++        }
++    }
++
++    const int basePos = filterPos[1];
++    if (basePos < 0) {
++        return 0;
++    }
++
++    /* The final two outputs are border-adjusted and stay on the exact tail. */
++    for (int i = 1; i < dstW - 2; i++) {
++        const int phase = (i - 1) & 1;
++        const int expectedPos = basePos + 5 * ((i - 1) >> 1) + 3 * phase;
++        const int16_t *expected = phase ? phaseB : phaseA;
++        const int16_t *current = filter + i * filterSize;
++
++        if (filterPos[i] != expectedPos) {
++            return 0;
++        }
++        for (int j = 0; j < filterSize; j++) {
++            if (current[j] != expected[j]) {
++                return 0;
++            }
++        }
++    }
++
++    return 1;
++}
++
++/* Match the exact one-phase 3:1, five-effective-tap layout. */
++static int hscale8to15_3_1_neon_compatible(int srcW, int dstW, int xInc, int filterSize,
++                                           const int16_t *filter, const int32_t *filterPos)
++{
++    if (!filter || !filterPos || filterSize != 8 || dstW < 12) {
++        return 0;
++    }
++    if ((int64_t)srcW != (int64_t)dstW * 3 || xInc != 196608) {
++        return 0;
++    }
++
++    const int16_t *phase = filter + filterSize;
++    for (int j = 5; j < filterSize; j++) {
++        if (phase[j]) {
++            return 0;
++        }
++    }
++
++    const int basePos = filterPos[1];
++    if (basePos < 0) {
++        return 0;
++    }
++
++    /* The final two outputs are border-adjusted and stay on the exact tail. */
++    for (int i = 1; i < dstW - 2; i++) {
++        const int expectedPos = basePos + 3 * (i - 1);
++        const int16_t *current = filter + i * filterSize;
++
++        if (filterPos[i] != expectedPos) {
++            return 0;
++        }
++        for (int j = 0; j < filterSize; j++) {
++            if (current[j] != phase[j]) {
++                return 0;
++            }
++        }
++    }
++
++    return 1;
++}
++
+@@ -359,0 +499,41 @@ av_cold void ff_sws_init_swscale_aarch64(SwsInternal *c)
++
++        /*
++         * Select fixed-ratio kernels only after validating the complete
++         * position and coefficient tables. Any mismatch retains the generic
++         * NEON function selected above.
++         */
++        if (c->srcBpc == 8 && c->dstBpc <= 14) {
++            if (hscale8to15_3_2_neon_compatible(c->opts.src_w, c->opts.dst_w, c->lumXInc,
++                                                c->hLumFilterSize, c->hLumFilter,
++                                                c->hLumFilterPos)) {
++                c->hyScale = ff_hscale8to15_3_2_neon;
++            } else if (hscale8to15_5_2_neon_compatible(c->opts.src_w, c->opts.dst_w, c->lumXInc,
++                                                       c->hLumFilterSize, c->hLumFilter,
++                                                       c->hLumFilterPos)) {
++                c->hyScale = ff_hscale8to15_5_2_neon;
++            } else if (hscale8to15_3_1_neon_compatible(c->opts.src_w, c->opts.dst_w, c->lumXInc,
++                                                       c->hLumFilterSize, c->hLumFilter,
++                                                       c->hLumFilterPos)) {
++                c->hyScale = ff_hscale8to15_3_1_neon;
++            }
++
++            if (hscale8to15_3_2_neon_compatible(c->chrSrcW, c->chrDstW, c->chrXInc,
++                                                c->hChrFilterSize, c->hChrFilter,
++                                                c->hChrFilterPos)) {
++                c->hcScale = ff_hscale8to15_3_2_neon;
++            } else if (hscale8to15_5_2_neon_compatible(c->chrSrcW, c->chrDstW, c->chrXInc,
++                                                       c->hChrFilterSize, c->hChrFilter,
++                                                       c->hChrFilterPos)) {
++                c->hcScale = ff_hscale8to15_5_2_neon;
++            } else if (hscale8to15_3_1_neon_compatible(c->chrSrcW, c->chrDstW, c->chrXInc,
++                                                       c->hChrFilterSize, c->hChrFilter,
++                                                       c->hChrFilterPos)) {
++                c->hcScale = ff_hscale8to15_3_1_neon;
++            }
++        }
++
++        if (c->opts.src_format == AV_PIX_FMT_YUV420P &&
++            dstFormat == AV_PIX_FMT_RGB24 &&
++            !(c->opts.flags & SWS_FULL_CHR_H_INT)) {
++            c->yuv2packedX = ff_yuv2rgb24_X_neon;
++        }
+diff --git a/libswscale/aarch64/yuv2rgb24_neon.c b/libswscale/aarch64/yuv2rgb24_neon.c
+new file mode 100644
+index 0000000..048439e
+--- /dev/null
++++ b/libswscale/aarch64/yuv2rgb24_neon.c
+@@ -0,0 +1,742 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config.h"
++#include <arm_neon.h>
++
++#include "libavutil/attributes.h"
++#include "libswscale/swscale.h"
++#include "libswscale/swscale_internal.h"
++#include "yuv2rgb24_neon.h"
++
++static av_always_inline void yuv2rgb24_write_pair(const SwsInternal *c, uint8_t *dest, int pair, int Y1, int Y2, int U,
++                                                  int V)
++{
++    const uint8_t *r = c->table_rV[V + YUVRGB_TABLE_HEADROOM];
++    const uint8_t *g = c->table_gU[U + YUVRGB_TABLE_HEADROOM] + c->table_gV[V + YUVRGB_TABLE_HEADROOM];
++    const uint8_t *b = c->table_bU[U + YUVRGB_TABLE_HEADROOM];
++    uint8_t *out = dest + pair * 6;
++
++    out[0] = r[Y1];
++    out[1] = g[Y1];
++    out[2] = b[Y1];
++    out[3] = r[Y2];
++    out[4] = g[Y2];
++    out[5] = b[Y2];
++}
++
++static av_always_inline void yuv2rgb24_X_scalar_pair(const SwsInternal *c, const int16_t *lumFilter,
++                                                     const int16_t **lumSrc, int lumFilterSize,
++                                                     const int16_t *chrFilter, const int16_t **chrUSrc,
++                                                     const int16_t **chrVSrc, int chrFilterSize, uint8_t *dest,
++                                                     int pair)
++{
++    int j;
++    int Y1 = 1 << 18;
++    int Y2 = 1 << 18;
++    int U = 1 << 18;
++    int V = 1 << 18;
++
++    for (j = 0; j < lumFilterSize; j++) {
++        Y1 += lumSrc[j][pair * 2] * (unsigned)lumFilter[j];
++        Y2 += lumSrc[j][pair * 2 + 1] * (unsigned)lumFilter[j];
++    }
++
++    for (j = 0; j < chrFilterSize; j++) {
++        U += chrUSrc[j][pair] * (unsigned)chrFilter[j];
++        V += chrVSrc[j][pair] * (unsigned)chrFilter[j];
++    }
++
++    yuv2rgb24_write_pair(c, dest, pair, Y1 >> 19, Y2 >> 19, U >> 19, V >> 19);
++}
++
++/*
++ * Clip four chroma samples exactly as av_clip_uint8(). The clipped values are
++ * shared by all R/G/B offset calculations in the current vector block.
++ */
++static av_always_inline int32x4_t yuv2rgb24_clip_u8_s32(int32x4_t chroma)
++{
++    const int32x4_t zero = vdupq_n_s32(0);
++    const int32x4_t max = vdupq_n_s32(255);
++
++    return vminq_s32(vmaxq_s32(chroma, zero), max);
++}
++
++/*
++ * Return the exact quotient used by FFmpeg 8.1.2 fill_table() for four
++ * already-clipped chroma samples:
++ *
++ *     q = (chroma * coeff) >> 16
++ *
++ * The constant -(coeff >> 9) part has been folded into the per-channel bias
++ * during table initialization.
++ */
++static av_always_inline int32x4_t yuv2rgb24_lut_q_s32(int32x4_t chroma, int coeff)
++{
++    return vshrq_n_s32(vmulq_n_s32(chroma, coeff), 16);
++}
++
++/* Convert two groups of four signed Q16 channel values to eight RGB bytes. */
++static av_always_inline uint8x8_t yuv2rgb24_lut_value_u8(int32x4_t valueLo, int32x4_t valueHi)
++{
++    const uint16x8_t value16 = vcombine_u16(vqshrun_n_s32(valueLo, 16), vqshrun_n_s32(valueHi, 16));
++
++    return vqmovn_u16(value16);
++}
++
++static av_always_inline uint8x16_t yuv2rgb24_interleave_pairs_u8(uint8x8_t even, uint8x8_t odd)
++{
++    const uint8x8x2_t zipped = vzip_u8(even, odd);
++
++    return vcombine_u8(zipped.val[0], zipped.val[1]);
++}
++
++/*
++ * Finish one 16-pixel bit-exact RGB24 block after vertical Y/U/V filtering.
++ * The arithmetic matches the optimized 4/2-tap path and FFmpeg's LUT
++ * construction; only the number of vertical taps differs between kernels.
++ */
++static av_always_inline void yuv2rgb24_store_filtered_16(const SwsInternal *c, uint8_t *dst, int32x4_t y1Lo,
++                                                         int32x4_t y1Hi, int32x4_t y2Lo, int32x4_t y2Hi, int32x4_t uLo,
++                                                         int32x4_t uHi, int32x4_t vLo, int32x4_t vHi)
++{
++    const int cy = c->yuv2rgb_lut32_cy;
++    const int crv = c->yuv2rgb_lut32_crv;
++    const int cbu = c->yuv2rgb_lut32_cbu;
++    const int cgu = c->yuv2rgb_lut32_cgu;
++    const int cgv = c->yuv2rgb_lut32_cgv;
++    const int rBias = c->yuv2rgb_lut32_r_bias;
++    const int gBias = c->yuv2rgb_lut32_g_bias;
++    const int bBias = c->yuv2rgb_lut32_b_bias;
++
++    y1Lo = vrshrq_n_s32(y1Lo, 19);
++    y1Hi = vrshrq_n_s32(y1Hi, 19);
++    y2Lo = vrshrq_n_s32(y2Lo, 19);
++    y2Hi = vrshrq_n_s32(y2Hi, 19);
++    uLo = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(uLo, 19));
++    uHi = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(uHi, 19));
++    vLo = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(vLo, 19));
++    vHi = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(vHi, 19));
++
++    const int32x4_t y1BaseLo = vmulq_n_s32(y1Lo, cy);
++    const int32x4_t y1BaseHi = vmulq_n_s32(y1Hi, cy);
++    const int32x4_t y2BaseLo = vmulq_n_s32(y2Lo, cy);
++    const int32x4_t y2BaseHi = vmulq_n_s32(y2Hi, cy);
++
++    int32x4_t qLo = yuv2rgb24_lut_q_s32(vLo, crv);
++    int32x4_t qHi = yuv2rgb24_lut_q_s32(vHi, crv);
++    int32x4_t chromaLo = vmlaq_n_s32(vdupq_n_s32(rBias), qLo, cy);
++    int32x4_t chromaHi = vmlaq_n_s32(vdupq_n_s32(rBias), qHi, cy);
++    const uint8x8_t rEven =
++        yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++    const uint8x8_t rOdd =
++        yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++    qLo = vaddq_s32(yuv2rgb24_lut_q_s32(uLo, cgu), yuv2rgb24_lut_q_s32(vLo, cgv));
++    qHi = vaddq_s32(yuv2rgb24_lut_q_s32(uHi, cgu), yuv2rgb24_lut_q_s32(vHi, cgv));
++    chromaLo = vmlaq_n_s32(vdupq_n_s32(gBias), qLo, cy);
++    chromaHi = vmlaq_n_s32(vdupq_n_s32(gBias), qHi, cy);
++    const uint8x8_t gEven =
++        yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++    const uint8x8_t gOdd =
++        yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++    qLo = yuv2rgb24_lut_q_s32(uLo, cbu);
++    qHi = yuv2rgb24_lut_q_s32(uHi, cbu);
++    chromaLo = vmlaq_n_s32(vdupq_n_s32(bBias), qLo, cy);
++    chromaHi = vmlaq_n_s32(vdupq_n_s32(bBias), qHi, cy);
++    const uint8x8_t bEven =
++        yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++    const uint8x8_t bOdd =
++        yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++    uint8x16x3_t rgb;
++    rgb.val[0] = yuv2rgb24_interleave_pairs_u8(rEven, rOdd);
++    rgb.val[1] = yuv2rgb24_interleave_pairs_u8(gEven, gOdd);
++    rgb.val[2] = yuv2rgb24_interleave_pairs_u8(bEven, bOdd);
++    vst3q_u8(dst, rgb);
++}
++
++/**
++ * NEON implementation of the normal YUV-to-RGB24 vertical scaler.
++ *
++ * The 4-tap luma / 2-tap chroma bit-exact path reproduces the RGB24 LUT
++ * construction performed by ff_yuv2rgb_c_init_tables() in FFmpeg 8.1.2,
++ * but evaluates it with 32-bit NEON arithmetic and writes 16 RGB24 pixels
++ * with vst3q_u8(). All unsupported or unsafe configurations retain the
++ * original LUT path.
++ */
++void ff_yuv2rgb24_X_neon(SwsInternal *c, const int16_t *lumFilter, const int16_t **lumSrc, int lumFilterSize,
++                         const int16_t *chrFilter, const int16_t **chrUSrc, const int16_t **chrVSrc, int chrFilterSize,
++                         const int16_t **alpSrc, uint8_t *dest, int dstW, int y)
++{
++    const int pairs = (dstW + 1) >> 1;
++    int pair = 0;
++
++    (void)alpSrc;
++    (void)y;
++
++    /*
++     * Fixed scenario 2: 1920x1280 YUV420P -> 768x512 RGB24.
++     * FFmpeg bilinear tables are 6-tap luma and 4-tap chroma vertically.
++     */
++    if (lumFilterSize == 6 && chrFilterSize == 4 && dstW == 768 && c->opts.src_format == AV_PIX_FMT_YUV420P &&
++        c->opts.dst_format == AV_PIX_FMT_RGB24 && c->srcBpc == 8 && c->dstBpc == 8 && c->yuv2rgb_lut32_neon_ok) {
++        const int16x4_t lumFilter0 = vld1_s16(lumFilter);
++        const int16x4_t lumFilter1 = vset_lane_s16(lumFilter[5], vset_lane_s16(lumFilter[4], vdup_n_s16(0), 0), 1);
++        const int16x4_t chrFilter0 = vld1_s16(chrFilter);
++        uint8_t *dstPtr = dest;
++        int lumOffset = 0;
++        int chrOffset = 0;
++        int blocks = 48;
++
++        do {
++            int16x8x2_t ys = vld2q_s16(lumSrc[0] + lumOffset);
++            int32x4_t y1Lo = vmull_lane_s16(vget_low_s16(ys.val[0]), lumFilter0, 0);
++            int32x4_t y1Hi = vmull_high_lane_s16(ys.val[0], lumFilter0, 0);
++            int32x4_t y2Lo = vmull_lane_s16(vget_low_s16(ys.val[1]), lumFilter0, 0);
++            int32x4_t y2Hi = vmull_high_lane_s16(ys.val[1], lumFilter0, 0);
++
++            ys = vld2q_s16(lumSrc[1] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter0, 1);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter0, 1);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter0, 1);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter0, 1);
++
++            ys = vld2q_s16(lumSrc[2] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter0, 2);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter0, 2);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter0, 2);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter0, 2);
++
++            ys = vld2q_s16(lumSrc[3] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter0, 3);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter0, 3);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter0, 3);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter0, 3);
++
++            ys = vld2q_s16(lumSrc[4] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter1, 0);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter1, 0);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter1, 0);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter1, 0);
++
++            ys = vld2q_s16(lumSrc[5] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter1, 1);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter1, 1);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter1, 1);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter1, 1);
++
++            int16x8_t us = vld1q_s16(chrUSrc[0] + chrOffset);
++            int16x8_t vs = vld1q_s16(chrVSrc[0] + chrOffset);
++            int32x4_t uLo = vmull_lane_s16(vget_low_s16(us), chrFilter0, 0);
++            int32x4_t uHi = vmull_high_lane_s16(us, chrFilter0, 0);
++            int32x4_t vLo = vmull_lane_s16(vget_low_s16(vs), chrFilter0, 0);
++            int32x4_t vHi = vmull_high_lane_s16(vs, chrFilter0, 0);
++
++            us = vld1q_s16(chrUSrc[1] + chrOffset);
++            vs = vld1q_s16(chrVSrc[1] + chrOffset);
++            uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilter0, 1);
++            uHi = vmlal_high_lane_s16(uHi, us, chrFilter0, 1);
++            vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilter0, 1);
++            vHi = vmlal_high_lane_s16(vHi, vs, chrFilter0, 1);
++
++            us = vld1q_s16(chrUSrc[2] + chrOffset);
++            vs = vld1q_s16(chrVSrc[2] + chrOffset);
++            uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilter0, 2);
++            uHi = vmlal_high_lane_s16(uHi, us, chrFilter0, 2);
++            vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilter0, 2);
++            vHi = vmlal_high_lane_s16(vHi, vs, chrFilter0, 2);
++
++            us = vld1q_s16(chrUSrc[3] + chrOffset);
++            vs = vld1q_s16(chrVSrc[3] + chrOffset);
++            uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilter0, 3);
++            uHi = vmlal_high_lane_s16(uHi, us, chrFilter0, 3);
++            vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilter0, 3);
++            vHi = vmlal_high_lane_s16(vHi, vs, chrFilter0, 3);
++
++            yuv2rgb24_store_filtered_16(c, dstPtr, y1Lo, y1Hi, y2Lo, y2Hi, uLo, uHi, vLo, vHi);
++            lumOffset += 16;
++            chrOffset += 8;
++            dstPtr += 48;
++        } while (--blocks);
++        return;
++    }
++
++    /*
++     * Fixed scenario 3: 3840x2160 YUV420P -> 1280x704 RGB24.
++     * FFmpeg bilinear tables are 8-tap luma and 4-tap chroma vertically.
++     */
++    if (lumFilterSize == 8 && chrFilterSize == 4 && dstW == 1280 && c->opts.src_format == AV_PIX_FMT_YUV420P &&
++        c->opts.dst_format == AV_PIX_FMT_RGB24 && c->srcBpc == 8 && c->dstBpc == 8 && c->yuv2rgb_lut32_neon_ok) {
++        const int16x4_t lumFilter0 = vld1_s16(lumFilter);
++        const int16x4_t lumFilter1 = vld1_s16(lumFilter + 4);
++        const int16x4_t chrFilter0 = vld1_s16(chrFilter);
++        uint8_t *dstPtr = dest;
++        int lumOffset = 0;
++        int chrOffset = 0;
++        int blocks = 80;
++
++        do {
++            int16x8x2_t ys = vld2q_s16(lumSrc[0] + lumOffset);
++            int32x4_t y1Lo = vmull_lane_s16(vget_low_s16(ys.val[0]), lumFilter0, 0);
++            int32x4_t y1Hi = vmull_high_lane_s16(ys.val[0], lumFilter0, 0);
++            int32x4_t y2Lo = vmull_lane_s16(vget_low_s16(ys.val[1]), lumFilter0, 0);
++            int32x4_t y2Hi = vmull_high_lane_s16(ys.val[1], lumFilter0, 0);
++
++            ys = vld2q_s16(lumSrc[1] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter0, 1);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter0, 1);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter0, 1);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter0, 1);
++
++            ys = vld2q_s16(lumSrc[2] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter0, 2);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter0, 2);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter0, 2);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter0, 2);
++
++            ys = vld2q_s16(lumSrc[3] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter0, 3);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter0, 3);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter0, 3);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter0, 3);
++
++            ys = vld2q_s16(lumSrc[4] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter1, 0);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter1, 0);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter1, 0);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter1, 0);
++
++            ys = vld2q_s16(lumSrc[5] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter1, 1);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter1, 1);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter1, 1);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter1, 1);
++
++            ys = vld2q_s16(lumSrc[6] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter1, 2);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter1, 2);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter1, 2);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter1, 2);
++
++            ys = vld2q_s16(lumSrc[7] + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilter1, 3);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilter1, 3);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilter1, 3);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilter1, 3);
++
++            int16x8_t us = vld1q_s16(chrUSrc[0] + chrOffset);
++            int16x8_t vs = vld1q_s16(chrVSrc[0] + chrOffset);
++            int32x4_t uLo = vmull_lane_s16(vget_low_s16(us), chrFilter0, 0);
++            int32x4_t uHi = vmull_high_lane_s16(us, chrFilter0, 0);
++            int32x4_t vLo = vmull_lane_s16(vget_low_s16(vs), chrFilter0, 0);
++            int32x4_t vHi = vmull_high_lane_s16(vs, chrFilter0, 0);
++
++            us = vld1q_s16(chrUSrc[1] + chrOffset);
++            vs = vld1q_s16(chrVSrc[1] + chrOffset);
++            uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilter0, 1);
++            uHi = vmlal_high_lane_s16(uHi, us, chrFilter0, 1);
++            vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilter0, 1);
++            vHi = vmlal_high_lane_s16(vHi, vs, chrFilter0, 1);
++
++            us = vld1q_s16(chrUSrc[2] + chrOffset);
++            vs = vld1q_s16(chrVSrc[2] + chrOffset);
++            uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilter0, 2);
++            uHi = vmlal_high_lane_s16(uHi, us, chrFilter0, 2);
++            vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilter0, 2);
++            vHi = vmlal_high_lane_s16(vHi, vs, chrFilter0, 2);
++
++            us = vld1q_s16(chrUSrc[3] + chrOffset);
++            vs = vld1q_s16(chrVSrc[3] + chrOffset);
++            uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilter0, 3);
++            uHi = vmlal_high_lane_s16(uHi, us, chrFilter0, 3);
++            vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilter0, 3);
++            vHi = vmlal_high_lane_s16(vHi, vs, chrFilter0, 3);
++
++            yuv2rgb24_store_filtered_16(c, dstPtr, y1Lo, y1Hi, y2Lo, y2Hi, uLo, uHi, vLo, vHi);
++            lumOffset += 16;
++            chrOffset += 8;
++            dstPtr += 48;
++        } while (--blocks);
++        return;
++    }
++
++    if (lumFilterSize == 4 && chrFilterSize == 2 && c->opts.src_format == AV_PIX_FMT_YUV420P &&
++        c->opts.dst_format == AV_PIX_FMT_RGB24 && c->srcBpc == 8 && c->dstBpc == 8 && c->yuv2rgb_lut32_neon_ok) {
++        const int16_t *lum0 = lumSrc[0];
++        const int16_t *lum1 = lumSrc[1];
++        const int16_t *lum2 = lumSrc[2];
++        const int16_t *lum3 = lumSrc[3];
++        const int16_t *chrU0 = chrUSrc[0];
++        const int16_t *chrU1 = chrUSrc[1];
++        const int16_t *chrV0 = chrVSrc[0];
++        const int16_t *chrV1 = chrVSrc[1];
++
++        /* Keep all fixed filter coefficients in two compact lane vectors. */
++        const int16x4_t lumFilterLane = vld1_s16(lumFilter);
++        const int16x4_t chrFilterLane = vset_lane_s16(chrFilter[1], vset_lane_s16(chrFilter[0], vdup_n_s16(0), 0), 1);
++
++        const int cy = c->yuv2rgb_lut32_cy;
++        const int crv = c->yuv2rgb_lut32_crv;
++        const int cbu = c->yuv2rgb_lut32_cbu;
++        const int cgu = c->yuv2rgb_lut32_cgu;
++        const int cgv = c->yuv2rgb_lut32_cgv;
++        const int rBias = c->yuv2rgb_lut32_r_bias;
++        const int gBias = c->yuv2rgb_lut32_g_bias;
++        const int bBias = c->yuv2rgb_lut32_b_bias;
++
++        /*
++         * Fixed-width hot path for the observed 1280-pixel output.
++         * Exactly 80 blocks of 16 pixels are processed, so source and
++         * destination pointers advance directly. This removes pair-based
++         * address calculations, the general vector-loop bound and the tail.
++         */
++        if (dstW == 1280) {
++            const int16_t *lum0Ptr = lum0;
++            const int16_t *lum1Ptr = lum1;
++            const int16_t *lum2Ptr = lum2;
++            const int16_t *lum3Ptr = lum3;
++            const int16_t *chrU0Ptr = chrU0;
++            const int16_t *chrU1Ptr = chrU1;
++            const int16_t *chrV0Ptr = chrV0;
++            const int16_t *chrV1Ptr = chrV1;
++            uint8_t *dstPtr = dest;
++            int blocks = 80;
++
++            do {
++                int16x8x2_t ys = vld2q_s16(lum0Ptr);
++                int32x4_t y1Lo = vmull_lane_s16(vget_low_s16(ys.val[0]), lumFilterLane, 0);
++                int32x4_t y1Hi = vmull_high_lane_s16(ys.val[0], lumFilterLane, 0);
++                int32x4_t y2Lo = vmull_lane_s16(vget_low_s16(ys.val[1]), lumFilterLane, 0);
++                int32x4_t y2Hi = vmull_high_lane_s16(ys.val[1], lumFilterLane, 0);
++
++                ys = vld2q_s16(lum1Ptr);
++                y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 1);
++                y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 1);
++                y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 1);
++                y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 1);
++
++                ys = vld2q_s16(lum2Ptr);
++                y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 2);
++                y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 2);
++                y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 2);
++                y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 2);
++
++                ys = vld2q_s16(lum3Ptr);
++                y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 3);
++                y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 3);
++                y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 3);
++                y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 3);
++
++                int16x8_t us = vld1q_s16(chrU0Ptr);
++                int16x8_t vs = vld1q_s16(chrV0Ptr);
++                int32x4_t uLo = vmull_lane_s16(vget_low_s16(us), chrFilterLane, 0);
++                int32x4_t uHi = vmull_high_lane_s16(us, chrFilterLane, 0);
++                int32x4_t vLo = vmull_lane_s16(vget_low_s16(vs), chrFilterLane, 0);
++                int32x4_t vHi = vmull_high_lane_s16(vs, chrFilterLane, 0);
++
++                us = vld1q_s16(chrU1Ptr);
++                vs = vld1q_s16(chrV1Ptr);
++                uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilterLane, 1);
++                uHi = vmlal_high_lane_s16(uHi, us, chrFilterLane, 1);
++                vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilterLane, 1);
++                vHi = vmlal_high_lane_s16(vHi, vs, chrFilterLane, 1);
++
++                y1Lo = vrshrq_n_s32(y1Lo, 19);
++                y1Hi = vrshrq_n_s32(y1Hi, 19);
++                y2Lo = vrshrq_n_s32(y2Lo, 19);
++                y2Hi = vrshrq_n_s32(y2Hi, 19);
++                uLo = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(uLo, 19));
++                uHi = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(uHi, 19));
++                vLo = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(vLo, 19));
++                vHi = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(vHi, 19));
++
++                /* Y * cy is shared by all three output channels. */
++                const int32x4_t y1BaseLo = vmulq_n_s32(y1Lo, cy);
++                const int32x4_t y1BaseHi = vmulq_n_s32(y1Hi, cy);
++                const int32x4_t y2BaseLo = vmulq_n_s32(y2Lo, cy);
++                const int32x4_t y2BaseHi = vmulq_n_s32(y2Hi, cy);
++
++                /* R: rBias + Y * cy + ((V * crv) >> 16) * cy. */
++                int32x4_t qLo = yuv2rgb24_lut_q_s32(vLo, crv);
++                int32x4_t qHi = yuv2rgb24_lut_q_s32(vHi, crv);
++                int32x4_t chromaLo = vmlaq_n_s32(vdupq_n_s32(rBias), qLo, cy);
++                int32x4_t chromaHi = vmlaq_n_s32(vdupq_n_s32(rBias), qHi, cy);
++                const uint8x8_t rEven =
++                    yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++                const uint8x8_t rOdd =
++                    yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++                /* G: gBias + Y * cy + (U contribution + V contribution) * cy. */
++                qLo = vaddq_s32(yuv2rgb24_lut_q_s32(uLo, cgu), yuv2rgb24_lut_q_s32(vLo, cgv));
++                qHi = vaddq_s32(yuv2rgb24_lut_q_s32(uHi, cgu), yuv2rgb24_lut_q_s32(vHi, cgv));
++                chromaLo = vmlaq_n_s32(vdupq_n_s32(gBias), qLo, cy);
++                chromaHi = vmlaq_n_s32(vdupq_n_s32(gBias), qHi, cy);
++                const uint8x8_t gEven =
++                    yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++                const uint8x8_t gOdd =
++                    yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++                /* B: bBias + Y * cy + ((U * cbu) >> 16) * cy. */
++                qLo = yuv2rgb24_lut_q_s32(uLo, cbu);
++                qHi = yuv2rgb24_lut_q_s32(uHi, cbu);
++                chromaLo = vmlaq_n_s32(vdupq_n_s32(bBias), qLo, cy);
++                chromaHi = vmlaq_n_s32(vdupq_n_s32(bBias), qHi, cy);
++                const uint8x8_t bEven =
++                    yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++                const uint8x8_t bOdd =
++                    yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++                uint8x16x3_t rgb;
++                rgb.val[0] = yuv2rgb24_interleave_pairs_u8(rEven, rOdd);
++                rgb.val[1] = yuv2rgb24_interleave_pairs_u8(gEven, gOdd);
++                rgb.val[2] = yuv2rgb24_interleave_pairs_u8(bEven, bOdd);
++
++                vst3q_u8(dstPtr, rgb);
++
++                lum0Ptr += 16;
++                lum1Ptr += 16;
++                lum2Ptr += 16;
++                lum3Ptr += 16;
++                chrU0Ptr += 8;
++                chrU1Ptr += 8;
++                chrV0Ptr += 8;
++                chrV1Ptr += 8;
++                dstPtr += 48;
++
++            } while (--blocks);
++
++            return;
++        }
++
++        for (; pair + 8 <= pairs; pair += 8) {
++            const int lumOffset = pair * 2;
++            int16x8x2_t ys = vld2q_s16(lum0 + lumOffset);
++            int32x4_t y1Lo = vmull_lane_s16(vget_low_s16(ys.val[0]), lumFilterLane, 0);
++            int32x4_t y1Hi = vmull_high_lane_s16(ys.val[0], lumFilterLane, 0);
++            int32x4_t y2Lo = vmull_lane_s16(vget_low_s16(ys.val[1]), lumFilterLane, 0);
++            int32x4_t y2Hi = vmull_high_lane_s16(ys.val[1], lumFilterLane, 0);
++
++            ys = vld2q_s16(lum1 + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 1);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 1);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 1);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 1);
++
++            ys = vld2q_s16(lum2 + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 2);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 2);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 2);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 2);
++
++            ys = vld2q_s16(lum3 + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 3);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 3);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 3);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 3);
++
++            int16x8_t us = vld1q_s16(chrU0 + pair);
++            int16x8_t vs = vld1q_s16(chrV0 + pair);
++            int32x4_t uLo = vmull_lane_s16(vget_low_s16(us), chrFilterLane, 0);
++            int32x4_t uHi = vmull_high_lane_s16(us, chrFilterLane, 0);
++            int32x4_t vLo = vmull_lane_s16(vget_low_s16(vs), chrFilterLane, 0);
++            int32x4_t vHi = vmull_high_lane_s16(vs, chrFilterLane, 0);
++
++            us = vld1q_s16(chrU1 + pair);
++            vs = vld1q_s16(chrV1 + pair);
++            uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilterLane, 1);
++            uHi = vmlal_high_lane_s16(uHi, us, chrFilterLane, 1);
++            vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilterLane, 1);
++            vHi = vmlal_high_lane_s16(vHi, vs, chrFilterLane, 1);
++
++            y1Lo = vrshrq_n_s32(y1Lo, 19);
++            y1Hi = vrshrq_n_s32(y1Hi, 19);
++            y2Lo = vrshrq_n_s32(y2Lo, 19);
++            y2Hi = vrshrq_n_s32(y2Hi, 19);
++            uLo = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(uLo, 19));
++            uHi = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(uHi, 19));
++            vLo = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(vLo, 19));
++            vHi = yuv2rgb24_clip_u8_s32(vrshrq_n_s32(vHi, 19));
++
++            /* Y * cy is shared by all three output channels. */
++            const int32x4_t y1BaseLo = vmulq_n_s32(y1Lo, cy);
++            const int32x4_t y1BaseHi = vmulq_n_s32(y1Hi, cy);
++            const int32x4_t y2BaseLo = vmulq_n_s32(y2Lo, cy);
++            const int32x4_t y2BaseHi = vmulq_n_s32(y2Hi, cy);
++
++            /* R: rBias + Y * cy + ((V * crv) >> 16) * cy. */
++            int32x4_t qLo = yuv2rgb24_lut_q_s32(vLo, crv);
++            int32x4_t qHi = yuv2rgb24_lut_q_s32(vHi, crv);
++            int32x4_t chromaLo = vmlaq_n_s32(vdupq_n_s32(rBias), qLo, cy);
++            int32x4_t chromaHi = vmlaq_n_s32(vdupq_n_s32(rBias), qHi, cy);
++            const uint8x8_t rEven =
++                yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++            const uint8x8_t rOdd =
++                yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++            /* G: gBias + Y * cy + (U contribution + V contribution) * cy. */
++            qLo = vaddq_s32(yuv2rgb24_lut_q_s32(uLo, cgu), yuv2rgb24_lut_q_s32(vLo, cgv));
++            qHi = vaddq_s32(yuv2rgb24_lut_q_s32(uHi, cgu), yuv2rgb24_lut_q_s32(vHi, cgv));
++            chromaLo = vmlaq_n_s32(vdupq_n_s32(gBias), qLo, cy);
++            chromaHi = vmlaq_n_s32(vdupq_n_s32(gBias), qHi, cy);
++            const uint8x8_t gEven =
++                yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++            const uint8x8_t gOdd =
++                yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++            /* B: bBias + Y * cy + ((U * cbu) >> 16) * cy. */
++            qLo = yuv2rgb24_lut_q_s32(uLo, cbu);
++            qHi = yuv2rgb24_lut_q_s32(uHi, cbu);
++            chromaLo = vmlaq_n_s32(vdupq_n_s32(bBias), qLo, cy);
++            chromaHi = vmlaq_n_s32(vdupq_n_s32(bBias), qHi, cy);
++            const uint8x8_t bEven =
++                yuv2rgb24_lut_value_u8(vaddq_s32(y1BaseLo, chromaLo), vaddq_s32(y1BaseHi, chromaHi));
++            const uint8x8_t bOdd =
++                yuv2rgb24_lut_value_u8(vaddq_s32(y2BaseLo, chromaLo), vaddq_s32(y2BaseHi, chromaHi));
++
++            uint8x16x3_t rgb;
++            rgb.val[0] = yuv2rgb24_interleave_pairs_u8(rEven, rOdd);
++            rgb.val[1] = yuv2rgb24_interleave_pairs_u8(gEven, gOdd);
++            rgb.val[2] = yuv2rgb24_interleave_pairs_u8(bEven, bOdd);
++
++            vst3q_u8(dest + pair * 6, rgb);
++        }
++    } else if (lumFilterSize == 4 && chrFilterSize == 2) {
++        const int16_t *lum0 = lumSrc[0];
++        const int16_t *lum1 = lumSrc[1];
++        const int16_t *lum2 = lumSrc[2];
++        const int16_t *lum3 = lumSrc[3];
++        const int16_t *chrU0 = chrUSrc[0];
++        const int16_t *chrU1 = chrUSrc[1];
++        const int16_t *chrV0 = chrVSrc[0];
++        const int16_t *chrV1 = chrVSrc[1];
++        /* Keep all fixed filter coefficients in two compact lane vectors. */
++        const int16x4_t lumFilterLane = vld1_s16(lumFilter);
++        const int16x4_t chrFilterLane = vset_lane_s16(chrFilter[1], vset_lane_s16(chrFilter[0], vdup_n_s16(0), 0), 1);
++
++        for (; pair + 8 <= pairs; pair += 8) {
++            const int lumOffset = pair * 2;
++            int32_t y1[8], y2[8], u[8], v[8];
++            int j;
++
++            int16x8x2_t ys = vld2q_s16(lum0 + lumOffset);
++            int32x4_t y1Lo = vmull_lane_s16(vget_low_s16(ys.val[0]), lumFilterLane, 0);
++            int32x4_t y1Hi = vmull_high_lane_s16(ys.val[0], lumFilterLane, 0);
++            int32x4_t y2Lo = vmull_lane_s16(vget_low_s16(ys.val[1]), lumFilterLane, 0);
++            int32x4_t y2Hi = vmull_high_lane_s16(ys.val[1], lumFilterLane, 0);
++
++            ys = vld2q_s16(lum1 + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 1);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 1);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 1);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 1);
++
++            ys = vld2q_s16(lum2 + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 2);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 2);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 2);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 2);
++
++            ys = vld2q_s16(lum3 + lumOffset);
++            y1Lo = vmlal_lane_s16(y1Lo, vget_low_s16(ys.val[0]), lumFilterLane, 3);
++            y1Hi = vmlal_high_lane_s16(y1Hi, ys.val[0], lumFilterLane, 3);
++            y2Lo = vmlal_lane_s16(y2Lo, vget_low_s16(ys.val[1]), lumFilterLane, 3);
++            y2Hi = vmlal_high_lane_s16(y2Hi, ys.val[1], lumFilterLane, 3);
++
++            int16x8_t us = vld1q_s16(chrU0 + pair);
++            int16x8_t vs = vld1q_s16(chrV0 + pair);
++            int32x4_t uLo = vmull_lane_s16(vget_low_s16(us), chrFilterLane, 0);
++            int32x4_t uHi = vmull_high_lane_s16(us, chrFilterLane, 0);
++            int32x4_t vLo = vmull_lane_s16(vget_low_s16(vs), chrFilterLane, 0);
++            int32x4_t vHi = vmull_high_lane_s16(vs, chrFilterLane, 0);
++
++            us = vld1q_s16(chrU1 + pair);
++            vs = vld1q_s16(chrV1 + pair);
++            uLo = vmlal_lane_s16(uLo, vget_low_s16(us), chrFilterLane, 1);
++            uHi = vmlal_high_lane_s16(uHi, us, chrFilterLane, 1);
++            vLo = vmlal_lane_s16(vLo, vget_low_s16(vs), chrFilterLane, 1);
++            vHi = vmlal_high_lane_s16(vHi, vs, chrFilterLane, 1);
++
++            vst1q_s32(y1, vrshrq_n_s32(y1Lo, 19));
++            vst1q_s32(y1 + 4, vrshrq_n_s32(y1Hi, 19));
++            vst1q_s32(y2, vrshrq_n_s32(y2Lo, 19));
++            vst1q_s32(y2 + 4, vrshrq_n_s32(y2Hi, 19));
++            vst1q_s32(u, vrshrq_n_s32(uLo, 19));
++            vst1q_s32(u + 4, vrshrq_n_s32(uHi, 19));
++            vst1q_s32(v, vrshrq_n_s32(vLo, 19));
++            vst1q_s32(v + 4, vrshrq_n_s32(vHi, 19));
++
++            for (j = 0; j < 8; j++) {
++                yuv2rgb24_write_pair(c, dest, pair + j, y1[j], y2[j], u[j], v[j]);
++            }
++        }
++    } else {
++        for (; pair + 8 <= pairs; pair += 8) {
++            int32x4_t y1Lo = vdupq_n_s32(1 << 18);
++            int32x4_t y1Hi = y1Lo;
++            int32x4_t y2Lo = y1Lo;
++            int32x4_t y2Hi = y1Lo;
++            int32x4_t uLo = y1Lo;
++            int32x4_t uHi = y1Lo;
++            int32x4_t vLo = y1Lo;
++            int32x4_t vHi = y1Lo;
++            int32_t y1[8], y2[8], u[8], v[8];
++            int j;
++
++            for (j = 0; j < lumFilterSize; j++) {
++                const int16x8_t filter = vdupq_n_s16(lumFilter[j]);
++                const int16x8x2_t ys = vld2q_s16(lumSrc[j] + pair * 2);
++
++                y1Lo = vmlal_s16(y1Lo, vget_low_s16(ys.val[0]), vget_low_s16(filter));
++                y1Hi = vmlal_high_s16(y1Hi, ys.val[0], filter);
++                y2Lo = vmlal_s16(y2Lo, vget_low_s16(ys.val[1]), vget_low_s16(filter));
++                y2Hi = vmlal_high_s16(y2Hi, ys.val[1], filter);
++            }
++
++            for (j = 0; j < chrFilterSize; j++) {
++                const int16x8_t filter = vdupq_n_s16(chrFilter[j]);
++                const int16x8_t us = vld1q_s16(chrUSrc[j] + pair);
++                const int16x8_t vs = vld1q_s16(chrVSrc[j] + pair);
++
++                uLo = vmlal_s16(uLo, vget_low_s16(us), vget_low_s16(filter));
++                uHi = vmlal_high_s16(uHi, us, filter);
++                vLo = vmlal_s16(vLo, vget_low_s16(vs), vget_low_s16(filter));
++                vHi = vmlal_high_s16(vHi, vs, filter);
++            }
++
++            vst1q_s32(y1, vshrq_n_s32(y1Lo, 19));
++            vst1q_s32(y1 + 4, vshrq_n_s32(y1Hi, 19));
++            vst1q_s32(y2, vshrq_n_s32(y2Lo, 19));
++            vst1q_s32(y2 + 4, vshrq_n_s32(y2Hi, 19));
++            vst1q_s32(u, vshrq_n_s32(uLo, 19));
++            vst1q_s32(u + 4, vshrq_n_s32(uHi, 19));
++            vst1q_s32(v, vshrq_n_s32(vLo, 19));
++            vst1q_s32(v + 4, vshrq_n_s32(vHi, 19));
++
++            for (j = 0; j < 8; j++) {
++                yuv2rgb24_write_pair(c, dest, pair + j, y1[j], y2[j], u[j], v[j]);
++            }
++        }
++    }
++
++    for (; pair < pairs; pair++) {
++        yuv2rgb24_X_scalar_pair(c, lumFilter, lumSrc, lumFilterSize, chrFilter, chrUSrc, chrVSrc, chrFilterSize, dest,
++                                pair);
++    }
++}
+diff --git a/libswscale/aarch64/yuv2rgb24_neon.h b/libswscale/aarch64/yuv2rgb24_neon.h
+new file mode 100644
+index 0000000..f4d6057
+--- /dev/null
++++ b/libswscale/aarch64/yuv2rgb24_neon.h
+@@ -0,0 +1,28 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef SWSCALE_AARCH64_YUV2RGB24_NEON_H
++#define SWSCALE_AARCH64_YUV2RGB24_NEON_H
++
++#include "libswscale/swscale_internal.h"
++
++void ff_yuv2rgb24_X_neon(SwsInternal *c, const int16_t *lumFilter, const int16_t **lumSrc, int lumFilterSize,
++                         const int16_t *chrFilter, const int16_t **chrUSrc, const int16_t **chrVSrc, int chrFilterSize,
++                         const int16_t **alpSrc, uint8_t *dest, int dstW, int y);
++
++#endif /* SWSCALE_AARCH64_YUV2RGB24_NEON_H */
+diff --git a/libswscale/swscale_internal.h b/libswscale/swscale_internal.h
+index 7d5eeae..aef42a8 100644
+--- a/libswscale/swscale_internal.h
++++ b/libswscale/swscale_internal.h
+@@ -701,0 +702,16 @@ struct SwsInternal {
++
++    /*
++     * Exact parameters used to construct the 8-bit RGB24 YUV lookup table.
++     * The AArch64 path uses these only when all intermediate operations are
++     * proven to fit signed 32-bit arithmetic; otherwise it keeps using the
++     * original byte-addressed LUT.
++     */
++    int yuv2rgb_lut32_neon_ok;
++    int yuv2rgb_lut32_cy;
++    int yuv2rgb_lut32_crv;
++    int yuv2rgb_lut32_cbu;
++    int yuv2rgb_lut32_cgu;
++    int yuv2rgb_lut32_cgv;
++    int yuv2rgb_lut32_r_bias;
++    int yuv2rgb_lut32_g_bias;
++    int yuv2rgb_lut32_b_bias;
+diff --git a/libswscale/yuv2rgb.c b/libswscale/yuv2rgb.c
+index c622018..3c131c1 100644
+--- a/libswscale/yuv2rgb.c
++++ b/libswscale/yuv2rgb.c
+@@ -706,0 +707,163 @@ static uint16_t roundToInt16(int64_t f)
++static int yuv2rgb_fits_int32(int64_t value)
++{
++    return value >= INT32_MIN && value <= INT32_MAX;
++}
++
++static int yuv2rgb_mul_u8_fits_int32(int64_t value)
++{
++    return value >= INT32_MIN / 255 && value <= INT32_MAX / 255;
++}
++
++/*
++ * Return the exact minimum and maximum quotient generated by:
++ *
++ *     (av_clip_uint8(chroma) * inc) >> 16
++ *
++ * The expression is monotonic in chroma, so the endpoints cover [0, 255].
++ */
++static int yuv2rgb_lut_q_range(int64_t inc, int64_t *minimum, int64_t *maximum)
++{
++    int64_t q0;
++    int64_t q255;
++
++    if (!yuv2rgb_fits_int32(inc) || !yuv2rgb_mul_u8_fits_int32(inc)) {
++        return 0;
++    }
++
++    q0 = 0;
++    q255 = (inc * 255) >> 16;
++
++    if (!yuv2rgb_fits_int32(q255)) {
++        return 0;
++    }
++
++    *minimum = FFMIN(q0, q255);
++    *maximum = FFMAX(q0, q255);
++    return 1;
++}
++
++/*
++ * Verify the reordered channel expression used by the AArch64 fast path:
++ *
++ *     value = bias + Y * cy + q * cy
++ *
++ * The RGB lookup tables reserve 512 luma entries below zero and 512 above
++ * 255, so the valid luma index range is [-512, 767]. Every intermediate is
++ * checked in the same order used by the NEON implementation.
++ */
++static int yuv2rgb_lut32_channel_safe(int64_t cy, int64_t bias, int64_t qmin, int64_t qmax)
++{
++    const int64_t ymin = -YUVRGB_TABLE_LUMA_HEADROOM;
++    const int64_t ymax = 255 + YUVRGB_TABLE_LUMA_HEADROOM;
++    const int64_t yprod0 = ymin * cy;
++    const int64_t yprod1 = ymax * cy;
++    const int64_t qprod0 = qmin * cy;
++    const int64_t qprod1 = qmax * cy;
++    const int64_t yprod_min = FFMIN(yprod0, yprod1);
++    const int64_t yprod_max = FFMAX(yprod0, yprod1);
++    const int64_t qprod_min = FFMIN(qprod0, qprod1);
++    const int64_t qprod_max = FFMAX(qprod0, qprod1);
++    const int64_t partial_min = bias + yprod_min;
++    const int64_t partial_max = bias + yprod_max;
++
++    return yuv2rgb_fits_int32(bias) && yuv2rgb_fits_int32(yprod_min) && yuv2rgb_fits_int32(yprod_max) &&
++           yuv2rgb_fits_int32(qprod_min) && yuv2rgb_fits_int32(qprod_max) && yuv2rgb_fits_int32(partial_min) &&
++           yuv2rgb_fits_int32(partial_max) && yuv2rgb_fits_int32(partial_min + qprod_min) &&
++           yuv2rgb_fits_int32(partial_max + qprod_max);
++}
++
++/*
++ * The direct AArch64 implementation uses signed 32-bit multiply/add. Enable
++ * it only when both the original LUT construction and the reordered
++ * precomputed-bias expression are representable without overflow.
++ */
++static int yuv2rgb_lut32_params_safe(int64_t cy, int64_t crv, int64_t cbu, int64_t cgu, int64_t cgv, int yoffs,
++                                     int64_t ybias, int table_plane_size, int32_t *r_bias, int32_t *g_bias,
++                                     int32_t *b_bias)
++{
++    int64_t rqmin, rqmax, bqmin, bqmax;
++    int64_t guqmin, guqmax, gvqmin, gvqmax;
++    int64_t gqmin, gqmax;
++    int64_t roff_min, roff_max;
++    int64_t boff_min, boff_max;
++    int64_t goff_min, goff_max;
++    int64_t rbias64, gbias64, bbias64;
++    int64_t last_product;
++
++    if (!yuv2rgb_fits_int32(cy) || !yuv2rgb_fits_int32(ybias) || cy < INT32_MIN / (table_plane_size - 1) ||
++        cy > INT32_MAX / (table_plane_size - 1)) {
++        return 0;
++    }
++
++    last_product = cy * (table_plane_size - 1);
++    if (!yuv2rgb_fits_int32(last_product) || !yuv2rgb_fits_int32(ybias + last_product)) {
++        return 0;
++    }
++
++    if (!yuv2rgb_lut_q_range(crv, &rqmin, &rqmax) || !yuv2rgb_lut_q_range(cbu, &bqmin, &bqmax) ||
++        !yuv2rgb_lut_q_range(cgu, &guqmin, &guqmax) || !yuv2rgb_lut_q_range(cgv, &gvqmin, &gvqmax)) {
++        return 0;
++    }
++
++    gqmin = guqmin + gvqmin;
++    gqmax = guqmax + gvqmax;
++    if (!yuv2rgb_fits_int32(gqmin) || !yuv2rgb_fits_int32(gqmax)) {
++        return 0;
++    }
++
++    roff_min = -(crv >> 9) + rqmin;
++    roff_max = -(crv >> 9) + rqmax;
++    boff_min = -(cbu >> 9) + bqmin;
++    boff_max = -(cbu >> 9) + bqmax;
++    goff_min = -(cgu >> 9) - (cgv >> 9) + gqmin;
++    goff_max = -(cgu >> 9) - (cgv >> 9) + gqmax;
++
++    if (!yuv2rgb_fits_int32(roff_min) || !yuv2rgb_fits_int32(roff_max) || !yuv2rgb_fits_int32(boff_min) ||
++        !yuv2rgb_fits_int32(boff_max) || !yuv2rgb_fits_int32(goff_min) || !yuv2rgb_fits_int32(goff_max) ||
++        roff_min < -table_plane_size || roff_max > table_plane_size || boff_min < -table_plane_size ||
++        boff_max > table_plane_size || goff_min < -table_plane_size || goff_max > table_plane_size) {
++        return 0;
++    }
++
++    rbias64 = ybias + ((int64_t)yoffs - (crv >> 9)) * cy;
++    gbias64 = ybias + ((int64_t)yoffs - (cgu >> 9) - (cgv >> 9)) * cy;
++    bbias64 = ybias + ((int64_t)yoffs - (cbu >> 9)) * cy;
++
++    if (!yuv2rgb_lut32_channel_safe(cy, rbias64, rqmin, rqmax) ||
++        !yuv2rgb_lut32_channel_safe(cy, gbias64, gqmin, gqmax) ||
++        !yuv2rgb_lut32_channel_safe(cy, bbias64, bqmin, bqmax)) {
++        return 0;
++    }
++
++    *r_bias = rbias64;
++    *g_bias = gbias64;
++    *b_bias = bbias64;
++    return 1;
++}
++
++static void yuv2rgb_save_lut32_params(SwsInternal *c, int bpp, int yoffs, int table_plane_size, int64_t cy, int64_t oy,
++                                      int64_t crv, int64_t cbu, int64_t cgu, int64_t cgv)
++{
++    const int64_t ybias = -(384LL << 16) - YUVRGB_TABLE_LUMA_HEADROOM * cy - oy + 0x8000;
++    int32_t r_bias;
++    int32_t g_bias;
++    int32_t b_bias;
++
++    c->yuv2rgb_lut32_neon_ok = 0;
++
++    if (c->opts.dst_format != AV_PIX_FMT_RGB24 || bpp != 24 ||
++        !yuv2rgb_lut32_params_safe(cy, crv, cbu, cgu, cgv, yoffs, ybias, table_plane_size, &r_bias, &g_bias, &b_bias)) {
++        return;
++    }
++
++    c->yuv2rgb_lut32_cy = cy;
++    c->yuv2rgb_lut32_crv = crv;
++    c->yuv2rgb_lut32_cbu = cbu;
++    c->yuv2rgb_lut32_cgu = cgu;
++    c->yuv2rgb_lut32_cgv = cgv;
++    c->yuv2rgb_lut32_r_bias = r_bias;
++    c->yuv2rgb_lut32_g_bias = g_bias;
++    c->yuv2rgb_lut32_b_bias = b_bias;
++    c->yuv2rgb_lut32_neon_ok = 1;
++}
++
+@@ -788,0 +952,2 @@ av_cold int ff_yuv2rgb_c_init_tables(SwsInternal *c, const int inv_table[4],
++    yuv2rgb_save_lut32_params(c, bpp, yoffs, table_plane_size, cy, oy, crv, cbu, cgu, cgv);
++
