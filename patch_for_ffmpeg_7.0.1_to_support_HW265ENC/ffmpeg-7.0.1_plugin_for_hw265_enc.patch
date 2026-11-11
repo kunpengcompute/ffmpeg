@@ -4094,7 +4094,7 @@ new file mode 100644
 index 0000000..c889123
 --- /dev/null
 +++ b/libavcodec/libhw265.c
-@@ -0,0 +1,787 @@
+@@ -0,0 +1,794 @@
 +/*
 + * HW265 encoder library plugin for FFmpeg
 + *
@@ -4693,6 +4693,7 @@ index 0000000..c889123
 +            sei_payload sei_payloads;
 +            getHdrVividMeteDataSei(ctx, &sei_payloads, pic->width, pic->height);
 +            ctx->input.hdrVividData = sei_payloads.payload;
++            ctx->input.hdrVividDataLen = sei_payloads.payloadSize;
 +        }
 +        ctx->input.inData.pixelSize[0] = ctx->input.inData.stride[0] * ctx->creatParams.picHeight;
 +        ctx->input.inData.pixelSize[1] = ctx->input.inData.stride[1] * (ctx->creatParams.picHeight >> chromShift);
@@ -4703,6 +4704,12 @@ index 0000000..c889123
 +        ctx->input.inFrameInfo.frameType = HWE_FRAME_TYPE_INVALID;
 +
 +        ret = ctx->api->Process(ctx->encHandle, &ctx->input);
++        if (ctx->input.hdrVividData != NULL) {
++            // 编码器内部已在HWE_Process内拷贝副本，此处可以立即释放上层申请的内存
++            free(ctx->input.hdrVividData);
++            ctx->input.hdrVividData = NULL;
++            ctx->input.hdrVividDataLen = 0;
++        }
 +        if (ret != HWE_RET_OK) {
 +            av_log(avctx, AV_LOG_ERROR, "ERROR: HWE_Process failed.\n");
 +            Libhw265EncodeClose(avctx);
