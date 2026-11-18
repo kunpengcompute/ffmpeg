@@ -1,10 +1,12 @@
 # FFmpeg 介绍
 
+本文档介绍鲲鹏FFmpeg代码仓，汇总基于鲲鹏服务器对开源FFmpeg的优化成果与性能优化补丁，涵盖FFmpeg-7.1.1 sws\_scale函数优化和FFmpeg-4.4.2缩放算法优化，适用于在鲲鹏服务器上使用FFmpeg的用户。
+
 ## 最新消息
 
-* [2026.03.30]：基于鲲鹏服务器对FFmpeg-4.4.2中libswscale库的bilinear、bicubic和lanczos三种缩放算法进行性能优化。
+* [2026-03-30]：基于鲲鹏服务器对FFmpeg-4.4.2中libswscale库的bilinear、bicubic和lanczos三种缩放算法进行性能优化。
 
-* [2025.09.30]：基于鲲鹏服务器对FFmpeg-7.1.1中libswscale库的sws\_scale函数进行性能优化。
+* [2025-09-30]：基于鲲鹏服务器对FFmpeg-7.1.1中libswscale库的sws\_scale函数进行性能优化。
 
 ## 简介
 
@@ -35,8 +37,8 @@
 
 |特性|特性说明|链接|
 | :--- | :--- | :--- | 
-|FFmpeg-7.1.1 sws\_scale函数优化|针对FFmpeg-7.1.1中的sws\_scale函数进行优化|[FFmpeg-7.1.1 特性指南](./docs/zh/ffmpeg_7.1.1_sws_scale_optimization_feature_guide.md)|
-|FFmpge-4.4.2 缩放算法优化|针对FFmpeg-4.2.2中的bilinear、bicubic和lanczos三种缩放算法进行优化|[FFmpeg-4.4.2 特性指南](./docs/zh/ffmpeg_4.4.2_scale_optimization_feature_guide.md)|
+|FFmpeg-7.1.1 sws\_scale函数优化|针对FFmpeg-7.1.1中的sws\_scale函数进行优化|《[FFmpeg-7.1.1 特性指南](./docs/zh/ffmpeg_7.1.1_sws_scale_optimization_feature_guide.md)》|
+|FFmpge-4.4.2 缩放算法优化|针对FFmpeg-4.2.2中的bilinear、bicubic和lanczos三种缩放算法进行优化|《[FFmpeg-4.4.2 特性指南](./docs/zh/ffmpeg_4.4.2_scale_optimization_feature_guide.md)》|
 
 ## License
 
@@ -46,4 +48,10 @@
 
 ## 贡献声明
 
-欢迎大家为社区做贡献，如果使用过程中有任何问题/建议，或者需要反馈特性需求和bug报告，可以提交[Issues](https://gitcode.com/boostkit/ffmpeg/issues)联系我们，具体贡献方法可参考[这里](https://gitcode.com/boostkit/community/blob/master/docs/contributor/contributing.md)。同时也欢迎大家在[讨论专区](https://gitcode.com/boostkit/community/discussions)展开讨论交流。感谢您的支持。
+欢迎大家为社区做贡献，如果使用过程中有任何问题/建议，或者需要反馈特性需求和bug报告，可以提交[Issues](https://gitcode.com/boostkit/ffmpeg/issues)联系我们，具体贡献方法可参考[社区贡献指南](https://gitcode.com/boostkit/community/blob/master/docs/contributor/contributing.md)。同时也欢迎大家在[讨论专区](https://gitcode.com/boostkit/community/discussions)展开讨论交流。感谢您的支持。
+
+## 修订记录
+
+| 文档版本 | 发布日期 | 修改说明 |
+| --- | --- | --- |
+| 01 | 2026-03-30 | 第一次正式发布。 |

@@ -1,5 +1,7 @@
 # 特性指南（FFmpeg-4.4.2）
 
+本文档介绍FFmpeg-4.4.2的libswscale缩放算法优化特性，涵盖bilinear、bicubic、lanczos三种算法的SVE向量化与指令流水化优化、编译安装及快速使用指导，适用于在鲲鹏服务器和openEuler环境下进行FFmpeg缩放性能优化的用户。
+
 ## 特性描述
 
 该特性针对FFmpeg-4.4.2中的libswscale的bilinear、bicubic和lanczos三种缩放算法下进行的优化。主要通过不同场景的向量化定制改写，使能SVE向量化以及指令流水化等方法，提升当前缩放算法的性能。
@@ -66,11 +68,11 @@ echo 16 > /proc/sys/abi/sve_default_vector_length
 
     | 参数 | 说明 |
     | :--- | :--- |
-    | `--prefix` | 指定安装路径 |
-    | `--enable-shared` | 指定生成动态库 |
-    | `--disable-debug` | 指定关闭调试模式 |
-    | `--extra-cflags` | 指定编译时使用的编译选项 |
-    | `--extra-ldflags` | 指定链接时使用的链接选项 |
+    | --prefix | 指定安装路径 |
+    | --enable-shared | 指定生成动态库 |
+    | --disable-debug | 指定关闭调试模式 |
+    | --extra-cflags | 指定编译时使用的编译选项 |
+    | --extra-ldflags | 指定链接时使用的链接选项 |
 
 5. 使用32个并行任务（线程）进行编译，可根据实际CPU核数选择。
 
@@ -113,3 +115,9 @@ echo 16 > /proc/sys/abi/sve_default_vector_length
     ```
 
     如果无错误信息且当前目录下有输出文件output_1280x720.yuv，说明执行成功。
+
+## 修订记录
+
+| 文档版本 | 发布日期 | 修改说明 |
+| --- | --- | --- |
+| 01 | 2026-03-30 | 第一次正式发布。 |
